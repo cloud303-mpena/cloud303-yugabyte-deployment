@@ -26,4 +26,6 @@ fi
   --placement_cloud aws \
   --placement_region "$REGION" \
   --placement_zone "$ZONE" \
+  --enable_ysql_conn_mgr=true \
+  --allowed_preview_flags_csv=enable_ysql_conn_mgr \
   >& "$FS_DIR/yb-tserver.out" &
