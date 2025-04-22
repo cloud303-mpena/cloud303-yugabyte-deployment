@@ -279,22 +279,22 @@ Resources:
         Configure:
           files:
             /home/ubuntu/install_software.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/install_software.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/start_master.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_master.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_master.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/start_tserver.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_tserver.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_tserver.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/set_replica_policy.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/set_replica_policy.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/set_replica_policy.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
@@ -401,22 +401,22 @@ Resources:
         Configure:
           files:
             /home/ubuntu/install_software.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/install_software.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/start_master.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_master.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_master.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/start_tserver.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_tserver.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_tserver.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/set_replica_policy.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/set_replica_policy.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/set_replica_policy.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
@@ -524,22 +524,22 @@ Resources:
         Configure:
           files:
             /home/ubuntu/install_software.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/install_software.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/start_master.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_master.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_master.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/start_tserver.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_tserver.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_tserver.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
             /home/ubuntu/set_replica_policy.sh:
-              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/set_replica_policy.sh"
+              source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/set_replica_policy.sh"
               mode: '0755'
               owner: !Ref SshUser
               group: !Ref SshUser
