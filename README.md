@@ -1,9 +1,13 @@
 # AWS CloudFormation
+This repo is a reconstruction of Yugabyte's setup repo. Major changes are as follows:
+  * Reconstructed installation and initialization scripts to automate the manual installation from the YB docs
+  * Switched from Amazon Linux to Ubuntu
+  * Uses apt instead of yum for package management
 
 This repo contains an AWS CloudFormation template to deploy YugabyteDB cluster on AWS. It does the following:
 * Creates a VPC with three public subnets
 * Creates an instance in each subnet
-  * Note that the instances that get created use Amazon Linux 1 as the OS.
+  * Note that the instances that get created use Ubuntu as the OS.
 * Deploys a YugabyteDB cluster across these three nodes
 
 # Pre-Flight Checks
@@ -23,14 +27,10 @@ This repo contains an AWS CloudFormation template to deploy YugabyteDB cluster o
     - US West (Oregon)
     - US East (Ohio)
 
-# Usage
-[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://go.aws/33qDE12)
-
-
 ## Deploying From AWS Command Line
   - Clone this repo.
     ```
-    $ git clone https://github.com/yugabyte/aws-cloudformation.git 
+    $ git clone https://github.com/cloud303-mpena/cloud303-yugabyte-deployment.git 
     ```
   - Change current directory to cloned git repo directory
   - Use aws cli to create cloudformation template <br/> 
@@ -51,7 +51,7 @@ This repo contains an AWS CloudFormation template to deploy YugabyteDB cluster o
 ## Deploying From AWS console 
   - Clone this repo.
      ```
-     $ git clone https://github.com/yugabyte/aws-cloudformation.git 
+     $ git clone https://github.com/cloud303-mpena/cloud303-yugabyte-deployment.git
      ```
   - Login to aws console and navigate to CloudFormation service dashboard.
   - Click on create stack button.
@@ -59,6 +59,8 @@ This repo contains an AWS CloudFormation template to deploy YugabyteDB cluster o
   - Select `Upload a template file` in specify template section.
   - Click `choose file` button in specify template section and upload the `yugabyte_cloudforamtion.yaml` file. Click on the next button.
   -  Specify your stack name and parameters for the stack. Click on next.
+      - If this is a production deployment, SWITCH THE EC2 TYPE AWAY FROM T3.MEDIUM. The other two options are database specific ec2 types.
+  -  Select or create an ssh key to be used with the stack
   -  Add a tag to your stack and choose IAM role if required. Click on next.
   -  Review the CloudFormation stack. If everything looks good, click on create stack button. 
   -  Once stack creation gets compleated, you can access the YugabyteDB admin from URL you get in the stack output section. 
