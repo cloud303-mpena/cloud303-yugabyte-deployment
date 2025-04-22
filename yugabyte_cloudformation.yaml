@@ -1,0 +1,670 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Simple deployment of YugabyteDB cluster in multi-AZ (default
+  availability zone is 3 and replication factor is also 3)
+
+Parameters:
+  DBVersion:
+    Description: Default YugabyteDB version is 2024.2.2.1-b190
+    Type: String
+    Default: "2024.2.2.1-b190"
+  RFFactor:
+    Description: Replication factor to create YugabyteDB cluster by default it is set to 3.
+    Type: String
+    Default: "3"
+  KeyName:
+    Description: 'Name of Key which is required for ssh to YugabyteDB node'
+    Type: "AWS::EC2::KeyPair::KeyName"
+    ConstraintDescription : "must be the name of an existing EC2 KeyPair."
+  InstanceType:
+    Description: 'Type of Instance for YugaByte DB cluster node'
+    Type: "String"
+    Default: "t3.medium"
+    AllowedValues: ["t3.medium","c5.xlarge", "c5.2xlarge"]
+    ConstraintDescription: "must be a valid EC2 instance type."
+  LatestAmiId:
+      Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+      Default: '/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id'
+
+  SshUser:
+    Type: String
+    Default: "ubuntu"
+
+Mappings:
+  SubnetConfig:
+    VPC:
+      CIDR: "10.0.0.0/16"
+    Public0:
+      CIDR: "10.0.0.0/24"
+    Public1:
+      CIDR: "10.0.1.0/24"
+    Public2:
+      CIDR: "10.0.2.0/24"
+
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      CidrBlock: !FindInMap
+        - SubnetConfig
+        - VPC
+        - CIDR
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackName'
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Ref "AWS::StackName"
+
+  PublicSubnet0:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !FindInMap
+        - SubnetConfig
+        - Public0
+        - CIDR
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackName'
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - '-public-0'
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !FindInMap
+        - SubnetConfig
+        - Public1
+        - CIDR
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackName'
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - '-public-1'
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select
+        - 2
+        - !GetAZs ''
+      CidrBlock: !FindInMap
+        - SubnetConfig
+        - Public2
+        - CIDR
+      MapPublicIpOnLaunch: 'true'
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackName'
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - '-public-2'
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackName'
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - '-IGW'
+  GatewayToInternet:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Application
+          Value: !Ref 'AWS::StackName'
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - '-public-route-table'
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteTableAssociation0:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet0
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetRouteTableAssociation1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetRouteTableAssociation2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+  YugaByteNodeSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'YugaByte Node Security Group'
+      GroupName: 'YugaByteNodeSG'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 7000
+          ToPort: 7000
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 7100
+          ToPort: 7100
+          CidrIp: !FindInMap
+            - SubnetConfig
+            - VPC
+            - CIDR
+        - IpProtocol: tcp
+          FromPort: 9000
+          ToPort: 9000
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 9100
+          ToPort: 9100
+          CidrIp: !FindInMap
+            - SubnetConfig
+            - VPC
+            - CIDR
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: !FindInMap
+            - SubnetConfig
+            - VPC
+            - CIDR
+        - IpProtocol: tcp
+          FromPort: 5433
+          ToPort: 5433
+          CidrIp: !FindInMap
+            - SubnetConfig
+            - VPC
+            - CIDR
+        - IpProtocol: tcp
+          FromPort: 9042
+          ToPort: 9042
+          CidrIp: !FindInMap
+            - SubnetConfig
+            - VPC
+            - CIDR
+      Tags:
+        - Key: 'Name'
+          Value: 'YugaByteSecurityGroup'
+
+  Node0NetInt:
+      Type: 'AWS::EC2::NetworkInterface'
+      Properties:
+        SubnetId: !Ref PublicSubnet0
+        GroupSet:
+          - !Ref YugaByteNodeSG
+
+  Node1NetInt:
+      Type: 'AWS::EC2::NetworkInterface'
+      Properties:
+        SubnetId: !Ref PublicSubnet1
+        GroupSet:
+          - !Ref YugaByteNodeSG
+
+  Node2NetInt:
+      Type: 'AWS::EC2::NetworkInterface'
+      Properties:
+        SubnetId: !Ref PublicSubnet2
+        GroupSet:
+          - !Ref YugaByteNodeSG
+
+
+  YugaByteNode0:
+    Type: 'AWS::EC2::Instance'
+    DependsOn: PublicRoute
+    CreationPolicy:
+      ResourceSignal:
+        Count: '1'
+        Timeout: pt5m
+    Metadata:
+       'AWS::CloudFormation::Init':
+        configSets:
+          InstallAndRun:
+            - Install
+            - Configure
+        Install:
+          packages:
+            apt:
+              git: []
+        Configure:
+          files:
+            /home/ubuntu/install_software.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/install_software.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/start_master.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_master.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/start_tserver.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_tserver.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/set_replica_policy.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/set_replica_policy.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+          commands:
+            00_Install_Yugabyte_DB:
+              command: !Sub |
+                  bash -c "cd /home/${SshUser} && \
+                  wget https://software.yugabyte.com/releases/2024.2.2.2/yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz && \
+                  tar xvfz yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz && cd yugabyte-2024.2.2.2/ && \
+                  ./bin/post_install.sh"
+
+            01_Install_Other_Software:
+              command: !Sub
+                - sudo bash -c "/home/${SSH_USER}/install_software.sh"
+                - {SSH_USER: !Ref SshUser}
+
+            02_Start_Master:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/start_master.sh ${MasterPrivateIp} ${Zone} ${Region} /home/${SSH_USER} '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    MasterPrivateIp: !GetAtt Node0NetInt.PrimaryPrivateIpAddress,
+                    Zone: !Select [0, !GetAZs ''],
+                    Region: !Ref AWS::Region,
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+
+            03_Start_TServer:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/start_tserver.sh ${TServerPrivateIp} ${Zone} ${Region} /home/${SSH_USER} '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    TServerPrivateIp: !GetAtt Node0NetInt.PrimaryPrivateIpAddress,
+                    Zone: !Select [0, !GetAZs ''],
+                    Region: !Ref AWS::Region,
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+
+
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces :
+        - NetworkInterfaceId: !Ref Node0NetInt
+          DeviceIndex: 0
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - 'Node-0'
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -xe
+            apt-get update -y
+            apt-get install -y python3-pip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            # Ubuntu uses a different path than Amazon Linux
+            mkdir -p /opt/aws/bin
+            ln -s /usr/local/bin/cfn-* /opt/aws/bin/
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource YugaByteNode0 --configsets InstallAndRun --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource YugaByteNode0 --region ${AWS::Region}
+
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeSize: 50
+            DeleteOnTermination: "true"
+            VolumeType: "gp2"
+
+  YugaByteNode1:
+    Type: 'AWS::EC2::Instance'
+    DependsOn: PublicRoute
+    CreationPolicy:
+      ResourceSignal:
+        Count: '1'
+        Timeout: pt5m
+    Metadata:
+       'AWS::CloudFormation::Init':
+        configSets:
+          InstallAndRun:
+            - Install
+            - Configure
+        Install:
+          packages:
+            apt:
+              git: []
+        Configure:
+          files:
+            /home/ubuntu/install_software.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/install_software.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/start_master.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_master.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/start_tserver.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_tserver.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/set_replica_policy.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/set_replica_policy.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+          commands:
+            00_Install_Yugabyte_DB:
+              command: !Sub |
+                  bash -c "cd /home/${SshUser} && \
+                  wget https://software.yugabyte.com/releases/2024.2.2.2/yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz && \
+                  tar xvfz yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz && cd yugabyte-2024.2.2.2/ && \
+                  ./bin/post_install.sh"
+
+            01_Install_Other_Software:
+              command: !Sub
+                - sudo bash -c "/home/${SSH_USER}/install_software.sh"
+                - {SSH_USER: !Ref SshUser}
+
+            02_Start_Master:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/start_master.sh ${MasterPrivateIp} ${Zone} ${Region} /home/${SSH_USER} '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    MasterPrivateIp: !GetAtt Node1NetInt.PrimaryPrivateIpAddress,
+                    Zone: !Select [1, !GetAZs ''],
+                    Region: !Ref AWS::Region,
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+                  
+            03_Start_TServer:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/start_tserver.sh ${TServerPrivateIp} ${Zone} ${Region} /home/${SSH_USER} '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    TServerPrivateIp: !GetAtt Node1NetInt.PrimaryPrivateIpAddress,
+                    Zone: !Select [1, !GetAZs ''],
+                    Region: !Ref AWS::Region,
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+
+
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces :
+        - NetworkInterfaceId: !Ref Node1NetInt
+          DeviceIndex: 0
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - 'Node-1'
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -xe
+            apt-get update -y
+            apt-get install -y python3-pip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            # Ubuntu uses a different path than Amazon Linux
+            mkdir -p /opt/aws/bin
+            ln -s /usr/local/bin/cfn-* /opt/aws/bin/
+
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource YugaByteNode1 --configsets InstallAndRun --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource YugaByteNode1 --region ${AWS::Region}
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeSize: 50
+            DeleteOnTermination: "true"
+            VolumeType: "gp2"
+
+
+  YugaByteNode2:
+    Type: 'AWS::EC2::Instance'
+    DependsOn: [PublicRoute, YugaByteNode0, YugaByteNode1]
+    CreationPolicy:
+      ResourceSignal:
+        Count: '1'
+        Timeout: pt5m
+    Metadata:
+       'AWS::CloudFormation::Init':
+        configSets:
+          InstallAndRun:
+            - Install
+            - Configure
+        Install:
+          packages:
+            apt:
+              git: []
+        Configure:
+          files:
+            /home/ubuntu/install_software.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/install_software.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/start_master.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_master.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/start_tserver.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/start_tserver.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+            /home/ubuntu/set_replica_policy.sh:
+              source: "https://raw.githubusercontent.com/cloud303-mpena/yugabyte-utilities/refs/heads/master/new_scripts/set_replica_policy.sh"
+              mode: '0755'
+              owner: !Ref SshUser
+              group: !Ref SshUser
+          commands:
+            00_Install_Yugabyte_DB:
+              command: !Sub |
+                  bash -c "cd /home/${SshUser} && \
+                  wget https://software.yugabyte.com/releases/2024.2.2.2/yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz && \
+                  tar xvfz yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz && cd yugabyte-2024.2.2.2/ && \
+                  ./bin/post_install.sh"
+            01_Install_Other_Software:
+              command: !Sub
+                - sudo bash -c "/home/${SSH_USER}/install_software.sh"
+                - {SSH_USER: !Ref SshUser}
+
+            02_Start_Master:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/start_master.sh ${MasterPrivateIp} ${Zone} ${Region} /home/${SSH_USER} '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    MasterPrivateIp: !GetAtt Node2NetInt.PrimaryPrivateIpAddress,
+                    Zone: !Select [2, !GetAZs ''],
+                    Region: !Ref AWS::Region,
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+                  
+            03_Start_TServer:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/start_tserver.sh ${TServerPrivateIp} ${Zone} ${Region} /home/${SSH_USER} '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    TServerPrivateIp: !GetAtt Node2NetInt.PrimaryPrivateIpAddress,
+                    Zone: !Select [2, !GetAZs ''],
+                    Region: !Ref AWS::Region,
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+
+            04_Configure_Replication:
+              command: !Sub
+                - bash -c "cd /home/${SSH_USER}/yugabyte-2024.2.2.2 && sudo -u ${SSH_USER} /home/${SSH_USER}/set_replica_policy.sh ${Region} ${Zone0} ${Zone1} ${Zone2} 3 '${MasterAddresses}'"
+                - {
+                    SSH_USER: !Ref SshUser,
+                    Region: !Ref AWS::Region,
+                    Zone0: !Select [0, !GetAZs ''],
+                    Zone1: !Select [1, !GetAZs ''],
+                    Zone2: !Select [2, !GetAZs ''],
+                    MasterAddresses: !Join [
+                      ",",
+                      [
+                        !Join ["", [!GetAtt Node0NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node1NetInt.PrimaryPrivateIpAddress, ":7100"]],
+                        !Join ["", [!GetAtt Node2NetInt.PrimaryPrivateIpAddress, ":7100"]]
+                      ]
+                    ]
+                  }
+
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces :
+        - NetworkInterfaceId: !Ref Node2NetInt
+          DeviceIndex: 0
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - ''
+            - - !Ref "AWS::StackName"
+              - 'Node-2'
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -xe
+            apt-get update -y
+            apt-get install -y python3-pip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+            # Ubuntu uses a different path than Amazon Linux
+            mkdir -p /opt/aws/bin
+            ln -s /usr/local/bin/cfn-* /opt/aws/bin/
+
+            /usr/local/bin/cfn-init -v --stack ${AWS::StackName} --resource YugaByteNode2 --configsets InstallAndRun --region ${AWS::Region}
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource YugaByteNode2 --region ${AWS::Region}
+
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeSize: 50
+            DeleteOnTermination: "true"
+            VolumeType: "gp2"
+
+Outputs:
+  VPC:
+    Description: YugabyteDB VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::Region}-${AWS::StackName}-VPC'
+  SecurityGroup:
+    Description: YugabyteDB Node Security Group
+    Value: !Ref YugaByteNodeSG
+  UI:
+    Description: URL to access YugabyteDB Admin Portal
+    Value: !Join [ "", [ "http://", !GetAtt YugaByteNode0.PublicDnsName, ":7000" ] ]
+  JDBC:
+    Description: JDBC Connect string for YugabyteDB
+    Value: !Join [ "", ["postgresql://yugabyte@", !GetAtt YugaByteNode0.PublicDnsName, ":5433" ] ]
+  YSQL:
+    Description: YSQL connect string for YugabyteDB
+    Value: !Join [ " ", ["ysqlsh -U yugabyte -h", !GetAtt YugaByteNode0.PublicDnsName, "-p 5433" ] ]
+  YCQL:
+    Description: YCQL connect string for YugabyteDB
+    Value: !Join [ " ", ["ycqlsh", !GetAtt YugaByteNode0.PublicDnsName, "9042" ] ]
+  YEDIS:
+    Description: YEDIS connect string for YugabyteDB
+    Value: !Join [ " ", ["redis-cli -h", !GetAtt YugaByteNode0.PublicDnsName, "-p 6379" ] ]
