@@ -278,13 +278,6 @@ Resources:
               git: []
         Configure:
           files:
-            /etc/cron.d/yugabyte-restart:
-              content: !Sub |
-                @reboot ${SshUser} /home/${SshUser}/start_master.sh ${Node0PrivateIp} ${Zone} ${Region} '${MasterAddresses}' >> /home/${SshUser}/master.log 2>&1
-                @reboot ${SshUser} /home/${SshUser}/start_tserver.sh ${Node0PrivateIp} ${Zone} ${Region} '${MasterAddresses}' >> /home/${SshUser}/tserver.log 2>&1
-              mode: '0644'
-              owner: root
-              group: root
             /home/ubuntu/install_software.sh:
               source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh"
               mode: '0755'
@@ -407,13 +400,6 @@ Resources:
               git: []
         Configure:
           files:
-            /etc/cron.d/yugabyte-restart:
-              content: !Sub |
-                @reboot ${SshUser} /home/${SshUser}/start_master.sh ${Node0PrivateIp} ${Zone} ${Region} '${MasterAddresses}' >> /home/${SshUser}/master.log 2>&1
-                @reboot ${SshUser} /home/${SshUser}/start_tserver.sh ${Node0PrivateIp} ${Zone} ${Region} '${MasterAddresses}' >> /home/${SshUser}/tserver.log 2>&1
-              mode: '0644'
-              owner: root
-              group: root
             /home/ubuntu/install_software.sh:
               source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh"
               mode: '0755'
@@ -537,13 +523,6 @@ Resources:
               git: []
         Configure:
           files:
-            /etc/cron.d/yugabyte-restart:
-              content: !Sub |
-                @reboot ${SshUser} /home/${SshUser}/start_master.sh ${Node1PrivateIp} ${Zone} ${Region} '${MasterAddresses}' >> /home/${SshUser}/master.log 2>&1
-                @reboot ${SshUser} /home/${SshUser}/start_tserver.sh ${Node1PrivateIp} ${Zone} ${Region} '${MasterAddresses}' >> /home/${SshUser}/tserver.log 2>&1
-              mode: '0644'
-              owner: root
-              group: root
             /home/ubuntu/install_software.sh:
               source: "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh"
               mode: '0755'
