@@ -347,7 +347,6 @@ Resources:
                     ]
                   }
 
-
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
