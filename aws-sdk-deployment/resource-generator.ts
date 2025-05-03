@@ -16,24 +16,16 @@ import {
   AssociateRouteTableCommandOutput,
   CreateNetworkInterfaceCommand,
   BlockDeviceMapping,
+  DescribeNetworkInterfacesCommand
 
 } from "@aws-sdk/client-ec2";
 import { SSMClient, SendCommandCommand } from "@aws-sdk/client-ssm";
 import inquirer from "inquirer";
-
-interface YugabyteParams {
-  DBVersion: string;
-  RFFactor: string;
-  KeyName: string;
-  InstanceType: string;
-  LatestAmiId: string;
-  SshUser: string;
-  DeploymentType: string;
-}
+import { YugabyteParams } from "./types";
 
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
-  RFFactor: "3",
+  RFFactor: 3,
   KeyName: "",
   InstanceType: "t3.medium",
   LatestAmiId:
@@ -44,7 +36,7 @@ const DEFAULTS: YugabyteParams = {
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
 const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
-async function promptForParams(): Promise<YugabyteParams> {
+export async function promptForParams(): Promise<YugabyteParams> {
   const answers = await inquirer.prompt([
     {
       type: "input",
@@ -95,26 +87,25 @@ async function promptForParams(): Promise<YugabyteParams> {
   return answers as YugabyteParams;
 }
 
-// Example usage
-promptForParams()
-  .then((params) => {
-    console.log("Collected parameters:", params);
-  })
-  .catch((err) => {
-    console.error(err.message);
-  });
+// // Example usage
+// promptForParams()
+//   .then((params) => {
+//     console.log("Collected parameters:", params);
+//   })
+//   .catch((err) => {
+//     console.error(err.message);
+//   });
 
 
-async function createEC2Instance(
+export async function createEC2Instance(
   region: string,
   instanceType: string,
   imageId: string,
   keyName: string,
   securityGroup: string,
-  nodePrivateIp: string,
+  netIntId: string,
   isMasterNode: boolean = false,
-  nodeIndex: number = 0,
-  masterPrivateIps: string[] = [],
+  masterNetIntIds: string[] = [],
   zone?: string,
   sshUser: string = "ubuntu",
 ) {
@@ -131,7 +122,12 @@ async function createEC2Instance(
         },
       },
     ];
-
+    
+    //set up paramaters for ec2 creation 
+    const nodePrivateIp =  await getPrimaryPrivateIpAddress(netIntId)
+    const masterPrivateIps = await Promise.all(
+      masterNetIntIds.map(id => getPrimaryPrivateIpAddress(id))
+    );    
     const instanceParams = {
       ImageId:
         "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
@@ -179,7 +175,37 @@ async function createEC2Instance(
     throw err;
   }
 }
-
+export async function getPrimaryPrivateIpAddress(networkInterfaceId: string): Promise<string> {
+  // Initialize the EC2 client
+  const ec2Client = new EC2Client({});
+  
+  try {
+    // Request details about the network interface
+    const response = await ec2Client.send(
+      new DescribeNetworkInterfacesCommand({
+        NetworkInterfaceIds: [networkInterfaceId],
+      })
+    );
+    
+    // Check if we got a valid response
+    if (!response.NetworkInterfaces || response.NetworkInterfaces.length === 0) {
+      throw new Error(`Network interface ${networkInterfaceId} not found`);
+    }
+    
+    // Get the primary private IP address
+    const primaryPrivateIpAddress = response.NetworkInterfaces[0].PrivateIpAddress;
+    
+    if (!primaryPrivateIpAddress) {
+      throw new Error(`No primary private IP address found for network interface ${networkInterfaceId}`);
+    }
+    
+    console.log(`Primary private IP address for ${networkInterfaceId}: ${primaryPrivateIpAddress}`);
+    return primaryPrivateIpAddress;
+  } catch (error) {
+    console.error(`Error getting primary private IP address for network interface ${networkInterfaceId}:`, error);
+    throw error;
+  }
+}
 // Helper function to generate the user data script for the EC2 instance
 function generateUserData(
   isMasterNode: boolean,
@@ -222,7 +248,7 @@ ${
 }
 `;
 }
-async function waitForInstanceRunning(region: string, instanceId: string) {
+export async function waitForInstanceRunning(region: string, instanceId: string) {
   const ec2Client = new EC2Client(region);
 
   console.log(`Waiting for instance ${instanceId} to be in 'running' state...`);
@@ -274,13 +300,7 @@ export async function createVpc(
 
   try {
     const createVpcCommand = new CreateVpcCommand({
-      CidrBlock: cidrBlock,
-      TagSpecifications: [
-        {
-          ResourceType: "vpc",
-          Tags: [{ Key: "Name", Value: name }],
-        },
-      ],
+      CidrBlock: cidrBlock
     });
     const vpcResult = await ec2Client.send(createVpcCommand);
 
@@ -298,7 +318,6 @@ export async function createVpc(
 export async function createSubnets(
   vpcId: string,
   azToCidr: { [az: string]: string }, // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
-  subnetNamePrefix: string
 ): Promise<string[]> {
   const ec2Client = new EC2Client({ region: "us-east-1" });
   const subnetIds: string[] = [];
@@ -308,12 +327,6 @@ export async function createSubnets(
       VpcId: vpcId,
       AvailabilityZone: az,
       CidrBlock: cidr,
-      TagSpecifications: [
-        {
-          ResourceType: "subnet",
-          Tags: [{ Key: "Name", Value: `${subnetNamePrefix}-${az}` }],
-        },
-      ],
     });
 
     const result = await ec2Client.send(subnetCommand);
@@ -521,31 +534,37 @@ export async function createInternetGatewayAndRouteTable(
  * @param routeTableId - The ID of the route table to associate with the subnet
  * @returns Promise resolving to the association response
  */
-export async function createSubnetRouteTableAssociation(
-  subnetId: string,
+export async function createSubnetRouteTableAssociations(
+  subnetIds: string[],
   routeTableId: string
-): Promise<AssociateRouteTableCommandOutput> {
+): Promise<AssociateRouteTableCommandOutput[]> {
   // Initialize the EC2 client
   const ec2Client = new EC2Client({});
-
+  const associationResponses: AssociateRouteTableCommandOutput[] = [];
+  
   try {
-    // Create the subnet route table association
-    const associationResponse = await ec2Client.send(
-      new AssociateRouteTableCommand({
-        SubnetId: subnetId,
-        RouteTableId: routeTableId,
-      })
-    );
-
-    console.log(
-      `Successfully associated subnet ${subnetId} with route table ${routeTableId}`
-    );
-    console.log(`Association ID: ${associationResponse.AssociationId}`);
-
-    return associationResponse;
+    // Create association for each subnet
+    for (const subnetId of subnetIds) {
+      const associationResponse = await ec2Client.send(
+        new AssociateRouteTableCommand({
+          SubnetId: subnetId,
+          RouteTableId: routeTableId,
+        })
+      );
+      
+      console.log(
+        `Successfully associated subnet ${subnetId} with route table ${routeTableId}`
+      );
+      console.log(`Association ID: ${associationResponse.AssociationId}`);
+      
+      associationResponses.push(associationResponse);
+    }
+    
+    console.log(`Associated ${subnetIds.length} subnets with route table ${routeTableId}`);
+    return associationResponses;
   } catch (error) {
     console.error(
-      `Error associating subnet ${subnetId} with route table ${routeTableId}:`,
+      `Error associating subnets with route table ${routeTableId}:`,
       error
     );
     throw error;
