@@ -16,10 +16,13 @@ import {
   AssociateRouteTableCommandOutput,
   CreateNetworkInterfaceCommand,
   BlockDeviceMapping,
-  DescribeNetworkInterfacesCommand
+  DescribeNetworkInterfacesCommand,
+  waitUntilInstanceRunning,
+  AllocateAddressCommand,
+  AssociateAddressCommand
 
 } from "@aws-sdk/client-ec2";
-import { SSMClient, SendCommandCommand } from "@aws-sdk/client-ssm";
+import { SSMClient, SendCommandCommand, GetParameterCommand } from "@aws-sdk/client-ssm";
 import inquirer from "inquirer";
 import { YugabyteParams } from "./types";
 
@@ -48,7 +51,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
       type: "input",
       name: "RFFactor",
       message: `RFFactor`,
-      default: DEFAULTS.RFFactor,
+      default: String(DEFAULTS.RFFactor),
     },
     {
       type: "input",
@@ -104,6 +107,7 @@ export async function createEC2Instance(
   keyName: string,
   securityGroup: string,
   netIntId: string,
+  vpcId: string,
   isMasterNode: boolean = false,
   masterNetIntIds: string[] = [],
   zone?: string,
@@ -122,20 +126,24 @@ export async function createEC2Instance(
         },
       },
     ];
-    
+
     //set up paramaters for ec2 creation 
     const nodePrivateIp =  await getPrimaryPrivateIpAddress(netIntId)
     const masterPrivateIps = await Promise.all(
       masterNetIntIds.map(id => getPrimaryPrivateIpAddress(id))
     );    
     const instanceParams = {
-      ImageId:
-        "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
+      ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
       MinCount: 1,
       MaxCount: 1,
       KeyName: keyName,
-      SecurityGroupIds: [securityGroup],
+      NetworkInterfaces: [
+        {
+          DeviceIndex: 0,
+          NetworkInterfaceId: netIntId,
+        },
+      ],
       BlockDeviceMappings: blockDeviceMappings,
       UserData: Buffer.from(
         generateUserData(
@@ -254,12 +262,13 @@ export async function waitForInstanceRunning(region: string, instanceId: string)
   console.log(`Waiting for instance ${instanceId} to be in 'running' state...`);
 
   let instanceRunning = false;
+  //Add limited number of attempts
   while (!instanceRunning) {
     try {
       const describeParams = {
         InstanceIds: [instanceId],
       };
-
+      // waitUntilInstanceRunning
       const command = new DescribeInstancesCommand(describeParams);
       const data = await ec2Client.send(command);
 
@@ -321,7 +330,7 @@ export async function createSubnets(
 ): Promise<string[]> {
   const ec2Client = new EC2Client({ region: "us-east-1" });
   const subnetIds: string[] = [];
-
+  console.log("Creating subnets...")
   for (const [az, cidr] of Object.entries(azToCidr)) {
     const subnetCommand = new CreateSubnetCommand({
       VpcId: vpcId,
@@ -338,7 +347,7 @@ export async function createSubnets(
       console.warn(`Failed to create subnet in ${az}`);
     }
   }
-
+  console.log("Subnets created!")
   return subnetIds;
 }
 
@@ -572,52 +581,77 @@ export async function createSubnetRouteTableAssociations(
 }
 
 /**
- * Creates a network interface in the specified subnet with a single security group
- * @param subnetId - The ID of the subnet where the network interface will be created
- * @param securityGroupId - Security group ID to assign to the network interface
- * @returns Promise resolving to the network interface ID
+ * Creates a network interface in the specified subnet with the provided security group,
+ * and associates an Elastic IP address with it.
+ * 
+ * @param subnetId - The subnet ID where the network interface will be created
+ * @param securityGroupId - The security group to attach to the network interface
+ * @returns A promise resolving to an object containing the network interface ID and public IP address
  */
-export async function createNetworkInterface(
+export async function createNetworkInterfaceWithPublicIP(
   subnetId: string,
   securityGroupId: string
-): Promise<string> {
-  // Initialize the EC2 client
+): Promise<{ networkInterfaceId: string; publicIp: string }> {
   const ec2Client = new EC2Client({});
-
+  
   try {
-    // Create the network interface
-    const response = await ec2Client.send(
+    // Step 1: Create the network interface
+    const createResponse = await ec2Client.send(
       new CreateNetworkInterfaceCommand({
         SubnetId: subnetId,
         Groups: [securityGroupId],
       })
     );
-
-    const networkInterfaceId = response.NetworkInterface?.NetworkInterfaceId;
-
+    
+    const networkInterfaceId = createResponse.NetworkInterface?.NetworkInterfaceId;
     if (!networkInterfaceId) {
       throw new Error("Failed to get network interface ID after creation");
     }
-
-    console.log(
-      `Created network interface ${networkInterfaceId} in subnet ${subnetId}`
+    
+    // Step 2: Allocate an Elastic IP
+    const allocateResponse = await ec2Client.send(
+      new AllocateAddressCommand({
+        Domain: 'vpc'
+      })
     );
-
-    return networkInterfaceId;
+    
+    const allocationId = allocateResponse.AllocationId;
+    const publicIp = allocateResponse.PublicIp;
+    
+    if (!allocationId || !publicIp) {
+      throw new Error("Failed to allocate Elastic IP");
+    }
+    
+    // Step 3: Associate the Elastic IP with the network interface
+    await ec2Client.send(
+      new AssociateAddressCommand({
+        AllocationId: allocationId,
+        NetworkInterfaceId: networkInterfaceId
+      })
+    );
+    
+    console.log(`Created network interface ${networkInterfaceId} in subnet ${subnetId}`);
+    console.log(`Associated Elastic IP ${publicIp} with the network interface`);
+    
+    // Return both the network interface ID and the public IP
+    return {
+      networkInterfaceId,
+      publicIp
+    };
   } catch (error) {
-    console.error("Error creating network interface:", error);
+    console.error("Error creating network interface with public IP:", error);
     throw error;
   }
 }
 
-export async function configureYugabyteReplication(
+export async function configureYugabyteNodes(
   instanceId: string,
   sshUser: string,
   region: string,
   zones: string[],
   masterAddresses: string[],
   replicationFactor = 3,
-  scriptUrl = "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/set_replica_policy.sh"
+  scriptUrl = "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/modify_placement.sh"
 ) {
   // Create SSM client
   const ssmClient = new SSMClient({ region });
@@ -649,4 +683,15 @@ export async function configureYugabyteReplication(
   );
   
   return response;
+}
+async function getAmiIdFromSSM(parameterName: string): Promise<string> {
+  const client = new SSMClient({ region: "us-east-1" });
+
+  const command = new GetParameterCommand({
+    Name: parameterName,
+    WithDecryption: false,
+  });
+
+  const response = await client.send(command);
+  return response.Parameter?.Value || "";
 }

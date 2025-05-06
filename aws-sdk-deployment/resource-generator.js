@@ -38,12 +38,13 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.promptForParams = promptForParams;
 exports.createEC2Instance = createEC2Instance;
+exports.getPrimaryPrivateIpAddress = getPrimaryPrivateIpAddress;
 exports.waitForInstanceRunning = waitForInstanceRunning;
 exports.createVpc = createVpc;
 exports.createSubnets = createSubnets;
 exports.createYugaByteSecurityGroup = createYugaByteSecurityGroup;
 exports.createInternetGatewayAndRouteTable = createInternetGatewayAndRouteTable;
-exports.createSubnetRouteTableAssociation = createSubnetRouteTableAssociation;
+exports.createSubnetRouteTableAssociations = createSubnetRouteTableAssociations;
 exports.createNetworkInterface = createNetworkInterface;
 exports.configureYugabyteReplication = configureYugabyteReplication;
 var client_ec2_1 = require("@aws-sdk/client-ec2");
@@ -51,7 +52,7 @@ var client_ssm_1 = require("@aws-sdk/client-ssm");
 var inquirer_1 = require("inquirer");
 var DEFAULTS = {
     DBVersion: "2024.2.2.1-b190",
-    RFFactor: "3",
+    RFFactor: 3,
     KeyName: "",
     InstanceType: "t3.medium",
     LatestAmiId: "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
@@ -76,7 +77,7 @@ function promptForParams() {
                             type: "input",
                             name: "RFFactor",
                             message: "RFFactor",
-                            default: DEFAULTS.RFFactor,
+                            default: String(DEFAULTS.RFFactor),
                         },
                         {
                             type: "input",
@@ -126,21 +127,21 @@ function promptForParams() {
 //   .catch((err) => {
 //     console.error(err.message);
 //   });
-function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, securityGroup_1, nodePrivateIp_1) {
-    return __awaiter(this, arguments, void 0, function (region, instanceType, imageId, keyName, securityGroup, nodePrivateIp, isMasterNode, nodeIndex, masterPrivateIps, zone, sshUser) {
-        var ec2Client, blockDeviceMappings, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
+function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, securityGroup_1, netIntId_1, vpcId_1) {
+    return __awaiter(this, arguments, void 0, function (region, instanceType, imageId, keyName, securityGroup, netIntId, vpcId, isMasterNode, masterNetIntIds, zone, sshUser) {
+        var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
         var _a;
+        var _b;
         if (isMasterNode === void 0) { isMasterNode = false; }
-        if (nodeIndex === void 0) { nodeIndex = 0; }
-        if (masterPrivateIps === void 0) { masterPrivateIps = []; }
+        if (masterNetIntIds === void 0) { masterNetIntIds = []; }
         if (sshUser === void 0) { sshUser = "ubuntu"; }
-        return __generator(this, function (_b) {
-            switch (_b.label) {
+        return __generator(this, function (_c) {
+            switch (_c.label) {
                 case 0:
                     ec2Client = new client_ec2_1.EC2Client({ region: region });
-                    _b.label = 1;
+                    _c.label = 1;
                 case 1:
-                    _b.trys.push([1, 3, , 4]);
+                    _c.trys.push([1, 6, , 7]);
                     blockDeviceMappings = [
                         {
                             DeviceName: "/dev/xvda",
@@ -151,22 +152,35 @@ function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, secur
                             },
                         },
                     ];
-                    instanceParams = {
-                        ImageId: "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
-                        InstanceType: instanceType,
-                        MinCount: 1,
-                        MaxCount: 1,
-                        KeyName: keyName,
-                        SecurityGroupIds: [securityGroup],
-                        BlockDeviceMappings: blockDeviceMappings,
-                        UserData: Buffer.from(generateUserData(isMasterNode, masterPrivateIps, zone || "".concat(region, "a"), // Default to first AZ if not specified
+                    return [4 /*yield*/, getPrimaryPrivateIpAddress(netIntId)];
+                case 2:
+                    nodePrivateIp = _c.sent();
+                    return [4 /*yield*/, Promise.all(masterNetIntIds.map(function (id) { return getPrimaryPrivateIpAddress(id); }))];
+                case 3:
+                    masterPrivateIps = _c.sent();
+                    _a = {};
+                    return [4 /*yield*/, getAmiIdFromSSM(imageId)];
+                case 4:
+                    instanceParams = (_a.ImageId = _c.sent(),
+                        _a.InstanceType = instanceType,
+                        _a.MinCount = 1,
+                        _a.MaxCount = 1,
+                        _a.KeyName = keyName,
+                        _a.NetworkInterfaces = [
+                            {
+                                DeviceIndex: 0,
+                                NetworkInterfaceId: netIntId,
+                            },
+                        ],
+                        _a.BlockDeviceMappings = blockDeviceMappings,
+                        _a.UserData = Buffer.from(generateUserData(isMasterNode, masterPrivateIps, zone || "".concat(region, "a"), // Default to first AZ if not specified
                         region, sshUser, nodePrivateIp)).toString("base64"),
-                    };
+                        _a);
                     command = new client_ec2_1.RunInstancesCommand(instanceParams);
                     return [4 /*yield*/, ec2Client.send(command)];
-                case 2:
-                    data = _b.sent();
-                    instance = (_a = data.Instances) === null || _a === void 0 ? void 0 : _a[0];
+                case 5:
+                    data = _c.sent();
+                    instance = (_b = data.Instances) === null || _b === void 0 ? void 0 : _b[0];
                     instanceId = instance === null || instance === void 0 ? void 0 : instance.InstanceId;
                     privateIpAddress = instance === null || instance === void 0 ? void 0 : instance.PrivateIpAddress;
                     console.log("Successfully created EC2 instance with ID: ".concat(instanceId));
@@ -179,10 +193,44 @@ function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, secur
                             privateIpAddress: privateIpAddress,
                             isMasterNode: isMasterNode,
                         }];
-                case 3:
-                    err_1 = _b.sent();
+                case 6:
+                    err_1 = _c.sent();
                     console.error("Error creating EC2 instance:", err_1);
                     throw err_1;
+                case 7: return [2 /*return*/];
+            }
+        });
+    });
+}
+function getPrimaryPrivateIpAddress(networkInterfaceId) {
+    return __awaiter(this, void 0, void 0, function () {
+        var ec2Client, response, primaryPrivateIpAddress, error_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    ec2Client = new client_ec2_1.EC2Client({});
+                    _a.label = 1;
+                case 1:
+                    _a.trys.push([1, 3, , 4]);
+                    return [4 /*yield*/, ec2Client.send(new client_ec2_1.DescribeNetworkInterfacesCommand({
+                            NetworkInterfaceIds: [networkInterfaceId],
+                        }))];
+                case 2:
+                    response = _a.sent();
+                    // Check if we got a valid response
+                    if (!response.NetworkInterfaces || response.NetworkInterfaces.length === 0) {
+                        throw new Error("Network interface ".concat(networkInterfaceId, " not found"));
+                    }
+                    primaryPrivateIpAddress = response.NetworkInterfaces[0].PrivateIpAddress;
+                    if (!primaryPrivateIpAddress) {
+                        throw new Error("No primary private IP address found for network interface ".concat(networkInterfaceId));
+                    }
+                    console.log("Primary private IP address for ".concat(networkInterfaceId, ": ").concat(primaryPrivateIpAddress));
+                    return [2 /*return*/, primaryPrivateIpAddress];
+                case 3:
+                    error_1 = _a.sent();
+                    console.error("Error getting primary private IP address for network interface ".concat(networkInterfaceId, ":"), error_1);
+                    throw error_1;
                 case 4: return [2 /*return*/];
             }
         });
@@ -265,13 +313,7 @@ function createVpc(cidrBlock, name) {
                 case 1:
                     _b.trys.push([1, 3, , 4]);
                     createVpcCommand = new client_ec2_1.CreateVpcCommand({
-                        CidrBlock: cidrBlock,
-                        TagSpecifications: [
-                            {
-                                ResourceType: "vpc",
-                                Tags: [{ Key: "Name", Value: name }],
-                            },
-                        ],
+                        CidrBlock: cidrBlock
                     });
                     return [4 /*yield*/, ec2Client.send(createVpcCommand)];
                 case 2:
@@ -290,8 +332,7 @@ function createVpc(cidrBlock, name) {
         });
     });
 }
-function createSubnets(vpcId, azToCidr, // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
-subnetNamePrefix) {
+function createSubnets(vpcId, azToCidr) {
     return __awaiter(this, void 0, void 0, function () {
         var ec2Client, subnetIds, _i, _a, _b, az, cidr, subnetCommand, result, subnetId;
         var _c;
@@ -300,6 +341,7 @@ subnetNamePrefix) {
                 case 0:
                     ec2Client = new client_ec2_1.EC2Client({ region: "us-east-1" });
                     subnetIds = [];
+                    console.log("Creating subnets...");
                     _i = 0, _a = Object.entries(azToCidr);
                     _d.label = 1;
                 case 1:
@@ -309,12 +351,6 @@ subnetNamePrefix) {
                         VpcId: vpcId,
                         AvailabilityZone: az,
                         CidrBlock: cidr,
-                        TagSpecifications: [
-                            {
-                                ResourceType: "subnet",
-                                Tags: [{ Key: "Name", Value: "".concat(subnetNamePrefix, "-").concat(az) }],
-                            },
-                        ],
                     });
                     return [4 /*yield*/, ec2Client.send(subnetCommand)];
                 case 2:
@@ -331,14 +367,16 @@ subnetNamePrefix) {
                 case 3:
                     _i++;
                     return [3 /*break*/, 1];
-                case 4: return [2 /*return*/, subnetIds];
+                case 4:
+                    console.log("Subnets created!");
+                    return [2 /*return*/, subnetIds];
             }
         });
     });
 }
 function createYugaByteSecurityGroup(vpcId, vpcCidr) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, createSgParams, createSgResponse, securityGroupId, ingressRules, error_1;
+        var ec2Client, createSgParams, createSgResponse, securityGroupId, ingressRules, error_2;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -438,9 +476,9 @@ function createYugaByteSecurityGroup(vpcId, vpcCidr) {
                     console.log("Successfully created YugaByte security group: ".concat(securityGroupId));
                     return [2 /*return*/, securityGroupId];
                 case 4:
-                    error_1 = _a.sent();
-                    console.error("Error creating YugaByte security group:", error_1);
-                    throw error_1;
+                    error_2 = _a.sent();
+                    console.error("Error creating YugaByte security group:", error_2);
+                    throw error_2;
                 case 5: return [2 /*return*/];
             }
         });
@@ -453,7 +491,7 @@ function createYugaByteSecurityGroup(vpcId, vpcCidr) {
  */
 function createInternetGatewayAndRouteTable(vpcId) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, createIgwResponse, internetGatewayId, createRouteTableResponse, routeTableId, error_2;
+        var ec2Client, createIgwResponse, internetGatewayId, createRouteTableResponse, routeTableId, error_3;
         var _a, _b;
         return __generator(this, function (_c) {
             switch (_c.label) {
@@ -501,9 +539,9 @@ function createInternetGatewayAndRouteTable(vpcId) {
                             routeTableId: routeTableId,
                         }];
                 case 6:
-                    error_2 = _c.sent();
-                    console.error("Error creating Internet Gateway and Route Table:", error_2);
-                    throw error_2;
+                    error_3 = _c.sent();
+                    console.error("Error creating Internet Gateway and Route Table:", error_3);
+                    throw error_3;
                 case 7: return [2 /*return*/];
             }
         });
@@ -515,30 +553,43 @@ function createInternetGatewayAndRouteTable(vpcId) {
  * @param routeTableId - The ID of the route table to associate with the subnet
  * @returns Promise resolving to the association response
  */
-function createSubnetRouteTableAssociation(subnetId, routeTableId) {
+function createSubnetRouteTableAssociations(subnetIds, routeTableId) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, associationResponse, error_3;
+        var ec2Client, associationResponses, _i, subnetIds_1, subnetId, associationResponse, error_4;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     ec2Client = new client_ec2_1.EC2Client({});
+                    associationResponses = [];
                     _a.label = 1;
                 case 1:
-                    _a.trys.push([1, 3, , 4]);
+                    _a.trys.push([1, 6, , 7]);
+                    _i = 0, subnetIds_1 = subnetIds;
+                    _a.label = 2;
+                case 2:
+                    if (!(_i < subnetIds_1.length)) return [3 /*break*/, 5];
+                    subnetId = subnetIds_1[_i];
                     return [4 /*yield*/, ec2Client.send(new client_ec2_1.AssociateRouteTableCommand({
                             SubnetId: subnetId,
                             RouteTableId: routeTableId,
                         }))];
-                case 2:
+                case 3:
                     associationResponse = _a.sent();
                     console.log("Successfully associated subnet ".concat(subnetId, " with route table ").concat(routeTableId));
                     console.log("Association ID: ".concat(associationResponse.AssociationId));
-                    return [2 /*return*/, associationResponse];
-                case 3:
-                    error_3 = _a.sent();
-                    console.error("Error associating subnet ".concat(subnetId, " with route table ").concat(routeTableId, ":"), error_3);
-                    throw error_3;
-                case 4: return [2 /*return*/];
+                    associationResponses.push(associationResponse);
+                    _a.label = 4;
+                case 4:
+                    _i++;
+                    return [3 /*break*/, 2];
+                case 5:
+                    console.log("Associated ".concat(subnetIds.length, " subnets with route table ").concat(routeTableId));
+                    return [2 /*return*/, associationResponses];
+                case 6:
+                    error_4 = _a.sent();
+                    console.error("Error associating subnets with route table ".concat(routeTableId, ":"), error_4);
+                    throw error_4;
+                case 7: return [2 /*return*/];
             }
         });
     });
@@ -551,7 +602,7 @@ function createSubnetRouteTableAssociation(subnetId, routeTableId) {
  */
 function createNetworkInterface(subnetId, securityGroupId) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, response, networkInterfaceId, error_4;
+        var ec2Client, response, networkInterfaceId, error_5;
         var _a;
         return __generator(this, function (_b) {
             switch (_b.label) {
@@ -573,9 +624,9 @@ function createNetworkInterface(subnetId, securityGroupId) {
                     console.log("Created network interface ".concat(networkInterfaceId, " in subnet ").concat(subnetId));
                     return [2 /*return*/, networkInterfaceId];
                 case 3:
-                    error_4 = _b.sent();
-                    console.error("Error creating network interface:", error_4);
-                    throw error_4;
+                    error_5 = _b.sent();
+                    console.error("Error creating network interface:", error_5);
+                    throw error_5;
                 case 4: return [2 /*return*/];
             }
         });
@@ -602,6 +653,26 @@ function configureYugabyteReplication(instanceId_1, sshUser_1, region_1, zones_1
                 case 1:
                     response = _a.sent();
                     return [2 /*return*/, response];
+            }
+        });
+    });
+}
+function getAmiIdFromSSM(parameterName) {
+    return __awaiter(this, void 0, void 0, function () {
+        var client, command, response;
+        var _a;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0:
+                    client = new client_ssm_1.SSMClient({ region: "us-east-1" });
+                    command = new client_ssm_1.GetParameterCommand({
+                        Name: parameterName,
+                        WithDecryption: false,
+                    });
+                    return [4 /*yield*/, client.send(command)];
+                case 1:
+                    response = _b.sent();
+                    return [2 /*return*/, ((_a = response.Parameter) === null || _a === void 0 ? void 0 : _a.Value) || ""];
             }
         });
     });

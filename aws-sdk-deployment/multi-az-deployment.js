@@ -39,12 +39,55 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var resGen = require("./resource-generator");
 function generateYugabyteStack() {
     return __awaiter(this, void 0, void 0, function () {
-        var params;
+        var params, vpcId, azToCidr, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, _i, subnetIds_1, subnetId, currNetIntId, azs, i;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0: return [4 /*yield*/, resGen.promptForParams()];
                 case 1:
                     params = _a.sent();
+                    return [4 /*yield*/, resGen.createVpc("10.0.0.0/16", "Yugabyte VPC")
+                        //TODO: CHANGE THIS TO DO BY REGION LATER
+                    ];
+                case 2:
+                    vpcId = _a.sent();
+                    azToCidr = {};
+                    //if (params.RFFactor === 3) {
+                    azToCidr = {
+                        "us-east-1a": "10.0.0.0/24",
+                        "us-east-1b": "10.0.1.0/24",
+                        "us-east-1c": "10.0.2.0/24"
+                    };
+                    return [4 /*yield*/, resGen.createSubnets(vpcId, azToCidr)];
+                case 3:
+                    subnetIds = _a.sent();
+                    return [4 /*yield*/, resGen.createInternetGatewayAndRouteTable(vpcId)];
+                case 4:
+                    intIdAndRouteTableId = _a.sent();
+                    return [4 /*yield*/, resGen.createSubnetRouteTableAssociations(subnetIds, intIdAndRouteTableId.routeTableId)];
+                case 5:
+                    associationResponse = _a.sent();
+                    return [4 /*yield*/, resGen.createYugaByteSecurityGroup(vpcId, "10.0.0.0/16")];
+                case 6:
+                    securityGroupId = _a.sent();
+                    netIntIds = [];
+                    _i = 0, subnetIds_1 = subnetIds;
+                    _a.label = 7;
+                case 7:
+                    if (!(_i < subnetIds_1.length)) return [3 /*break*/, 10];
+                    subnetId = subnetIds_1[_i];
+                    return [4 /*yield*/, resGen.createNetworkInterface(subnetId, securityGroupId)];
+                case 8:
+                    currNetIntId = _a.sent();
+                    netIntIds.push(currNetIntId);
+                    _a.label = 9;
+                case 9:
+                    _i++;
+                    return [3 /*break*/, 7];
+                case 10:
+                    azs = Object.keys(azToCidr);
+                    for (i = 0; i < params.RFFactor; i++) {
+                        resGen.createEC2Instance('us-east-1', params.InstanceType, params.LatestAmiId, params.KeyName, securityGroupId, netIntIds[i], vpcId, true, netIntIds, azs[i]);
+                    }
                     return [2 /*return*/, ""];
             }
         });

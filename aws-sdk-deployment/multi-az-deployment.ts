@@ -1,3 +1,4 @@
+import { InstanceIpv6Address } from '@aws-sdk/client-ec2';
 import * as resGen from './resource-generator'
 import {YugabyteParams} from './types'
 
@@ -9,21 +10,21 @@ async function generateYugabyteStack(): Promise<string>{
 
 //TODO: CHANGE THIS TO DO BY REGION LATER
     let azToCidr: { [az: string]: string } = {}
-    if (params.RFFactor === 3) {
+    //if (params.RFFactor === 3) {
         azToCidr = {
           "us-east-1a": "10.0.0.0/24",
           "us-east-1b": "10.0.1.0/24",
           "us-east-1c": "10.0.2.0/24"
         };
-      } else if (params.RFFactor === 5) {
-        azToCidr = {
-          "us-east-1a": "10.0.0.0/24",
-          "us-east-1b": "10.0.1.0/24",
-          "us-east-1c": "10.0.2.0/24",
-          "us-east-1d": "10.0.3.0/24",
-          "us-east-1e": "10.0.4.0/24"
-        };
-      }
+    //   } else if (params.RFFactor === 5) {
+    //     azToCidr = {
+    //       "us-east-1a": "10.0.0.0/24",
+    //       "us-east-1b": "10.0.1.0/24",
+    //       "us-east-1c": "10.0.2.0/24",
+    //       "us-east-1d": "10.0.3.0/24",
+    //       "us-east-1e": "10.0.4.0/24"
+    //     };
+    //   }
     const subnetIds = await resGen.createSubnets(vpcId!, azToCidr)
 
     const intIdAndRouteTableId = await resGen.createInternetGatewayAndRouteTable(vpcId!)
@@ -33,27 +34,46 @@ async function generateYugabyteStack(): Promise<string>{
     const securityGroupId = await resGen.createYugaByteSecurityGroup(vpcId!, "10.0.0.0/16")
 
     let netIntIds: string[] = [];
+    let elasticIps: string[] = [];
     for (const subnetId of subnetIds) {
-      let currNetIntId = await resGen.createNetworkInterface(subnetId, securityGroupId);
-      netIntIds.push(currNetIntId);
+      let currNetIntIdAndIp = await resGen.createNetworkInterfaceWithPublicIP(subnetId, securityGroupId);
+      netIntIds.push(currNetIntIdAndIp.networkInterfaceId)
+      elasticIps.push(currNetIntIdAndIp.publicIp)
     }
 
     const azs = Object.keys(azToCidr);
 
+    let ec2InstanceIds: Promise<{
+        instanceId: string;
+        privateIpAddress?: string;
+        publicIp?: string; // Add this field to the return type
+        isMasterNode: boolean;
+      }>[] = []
     for(let i = 0; i < params.RFFactor; i++){
-        resGen.createEC2Instance(
+        ec2InstanceIds.push(resGen.createEC2Instance(
             'us-east-1',
             params.InstanceType,
             params.LatestAmiId,
             params.KeyName,
             securityGroupId,
             netIntIds[i],
+            vpcId!,
             true,
             netIntIds,
             azs[i]
-        )
+        ))
     }
+    await Promise.all(
+        ec2InstanceIds.map(async (instancePromise) => {
+          const instance = await instancePromise;
+          return resGen.waitForInstanceRunning("us-east-1", instance.instanceId);
+        })
+      );
+    resGen.configureYugabyteNodes((await ec2InstanceIds[0]).instanceId, params.SshUser, "us-east-1", Object.keys(azToCidr).join(','), (await ec2InstanceIds[0]).privateIpAddress,  )
+
     return ""
 }
 
 generateYugabyteStack()
+
+//nest.js
