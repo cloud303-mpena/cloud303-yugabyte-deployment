@@ -6,4 +6,5 @@ export interface YugabyteParams {
     LatestAmiId: string;
     SshUser: string;
     DeploymentType: string;
+    Region: string;
   }

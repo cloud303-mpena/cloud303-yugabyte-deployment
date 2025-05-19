@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.798.0",
+    "@aws-sdk/client-iam": "^3.812.0",
     "@aws-sdk/client-ssm": "^3.799.0",
     "inquirer": "^12.6.0",
     "readline": "^1.3.0"

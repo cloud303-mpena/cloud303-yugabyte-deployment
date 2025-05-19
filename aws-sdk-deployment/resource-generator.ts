@@ -19,12 +19,75 @@ import {
   DescribeNetworkInterfacesCommand,
   waitUntilInstanceRunning,
   AllocateAddressCommand,
-  AssociateAddressCommand
-
+  AssociateAddressCommand,
 } from "@aws-sdk/client-ec2";
-import { SSMClient, SendCommandCommand, GetParameterCommand } from "@aws-sdk/client-ssm";
+import {
+  SSMClient,
+  SendCommandCommand,
+  GetParameterCommand,
+} from "@aws-sdk/client-ssm";
+
 import inquirer from "inquirer";
 import { YugabyteParams } from "./types";
+import {
+  IAMClient,
+  CreateRoleCommand,
+  AttachRolePolicyCommand,
+  CreateInstanceProfileCommand,
+  AddRoleToInstanceProfileCommand,
+} from "@aws-sdk/client-iam";
+
+
+export async function createSSMInstanceRole(roleName: string) {
+  const iamClient = new IAMClient({ region: "us-east-1" });
+
+  // Trust policy for EC2
+  const assumeRolePolicyDocument = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Principal: {
+          Service: "ec2.amazonaws.com",
+        },
+        Action: "sts:AssumeRole",
+      },
+    ],
+  });
+
+  // 1. Create IAM Role
+  await iamClient.send(
+    new CreateRoleCommand({
+      RoleName: roleName,
+      AssumeRolePolicyDocument: assumeRolePolicyDocument,
+    })
+  );
+
+  // 2. Attach AmazonSSMManagedInstanceCore Policy
+  await iamClient.send(
+    new AttachRolePolicyCommand({
+      RoleName: roleName,
+      PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    })
+  );
+
+  // 3. Create Instance Profile (required for EC2 attachment)
+  await iamClient.send(
+    new CreateInstanceProfileCommand({
+      InstanceProfileName: roleName,
+    })
+  );
+
+  // 4. Add Role to Instance Profile
+  await iamClient.send(
+    new AddRoleToInstanceProfileCommand({
+      InstanceProfileName: roleName,
+      RoleName: roleName,
+    })
+  );
+
+  console.log(`Created EC2 IAM role and instance profile: ${roleName}`);
+}
 
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
@@ -35,6 +98,7 @@ const DEFAULTS: YugabyteParams = {
     "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
   SshUser: "ubuntu",
   DeploymentType: "Multi-AZ",
+  Region: "us-east-1"
 };
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
@@ -99,7 +163,6 @@ export async function promptForParams(): Promise<YugabyteParams> {
 //     console.error(err.message);
 //   });
 
-
 export async function createEC2Instance(
   region: string,
   instanceType: string,
@@ -111,7 +174,7 @@ export async function createEC2Instance(
   isMasterNode: boolean = false,
   masterNetIntIds: string[] = [],
   zone?: string,
-  sshUser: string = "ubuntu",
+  sshUser: string = "ubuntu"
 ) {
   const ec2Client = new EC2Client({ region });
   try {
@@ -127,14 +190,18 @@ export async function createEC2Instance(
       },
     ];
 
-    //set up paramaters for ec2 creation 
-    const nodePrivateIp =  await getPrimaryPrivateIpAddress(netIntId)
+    //set up paramaters for ec2 creation
+    const nodePrivateIp = await getPrimaryPrivateIpAddress(netIntId);
     const masterPrivateIps = await Promise.all(
-      masterNetIntIds.map(id => getPrimaryPrivateIpAddress(id))
-    );    
+      masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(id))
+    );
     const instanceParams = {
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
+      IamInstanceProfile: {
+        Name: "SSMPermissionRole", // same as what you passed to `createSSMInstanceRole`
+      },
+
       MinCount: 1,
       MaxCount: 1,
       KeyName: keyName,
@@ -183,10 +250,12 @@ export async function createEC2Instance(
     throw err;
   }
 }
-export async function getPrimaryPrivateIpAddress(networkInterfaceId: string): Promise<string> {
+export async function getPrimaryPrivateIpAddress(
+  networkInterfaceId: string
+): Promise<string> {
   // Initialize the EC2 client
   const ec2Client = new EC2Client({});
-  
+
   try {
     // Request details about the network interface
     const response = await ec2Client.send(
@@ -194,23 +263,34 @@ export async function getPrimaryPrivateIpAddress(networkInterfaceId: string): Pr
         NetworkInterfaceIds: [networkInterfaceId],
       })
     );
-    
+
     // Check if we got a valid response
-    if (!response.NetworkInterfaces || response.NetworkInterfaces.length === 0) {
+    if (
+      !response.NetworkInterfaces ||
+      response.NetworkInterfaces.length === 0
+    ) {
       throw new Error(`Network interface ${networkInterfaceId} not found`);
     }
-    
+
     // Get the primary private IP address
-    const primaryPrivateIpAddress = response.NetworkInterfaces[0].PrivateIpAddress;
-    
+    const primaryPrivateIpAddress =
+      response.NetworkInterfaces[0].PrivateIpAddress;
+
     if (!primaryPrivateIpAddress) {
-      throw new Error(`No primary private IP address found for network interface ${networkInterfaceId}`);
+      throw new Error(
+        `No primary private IP address found for network interface ${networkInterfaceId}`
+      );
     }
-    
-    console.log(`Primary private IP address for ${networkInterfaceId}: ${primaryPrivateIpAddress}`);
+
+    console.log(
+      `Primary private IP address for ${networkInterfaceId}: ${primaryPrivateIpAddress}`
+    );
     return primaryPrivateIpAddress;
   } catch (error) {
-    console.error(`Error getting primary private IP address for network interface ${networkInterfaceId}:`, error);
+    console.error(
+      `Error getting primary private IP address for network interface ${networkInterfaceId}:`,
+      error
+    );
     throw error;
   }
 }
@@ -225,7 +305,6 @@ function generateUserData(
 ): string {
   // Format master addresses for YugaByteDB configuration
   const masterAddresses = masterPrivateIps.map((ip) => `${ip}:7100`).join(",");
-
 
   return `#!/bin/bash -xe
 apt-get update -y
@@ -256,48 +335,55 @@ ${
 }
 `;
 }
-export async function waitForInstanceRunning(region: string, instanceId: string) {
-  const ec2Client = new EC2Client(region);
-
+/**
+ * Waits for an EC2 instance to reach the 'running' state and logs its public IP.
+ * Uses the built-in AWS SDK waitUntilInstanceRunning waiter.
+ *
+ * @param region - The AWS region where the instance exists
+ * @param instanceId - The ID of the EC2 instance to wait for
+ * @returns A promise that resolves when the instance is running
+ */
+export async function waitForInstanceRunning(
+  region: string,
+  instanceId: string
+) {
+  const ec2Client = new EC2Client({ region });
   console.log(`Waiting for instance ${instanceId} to be in 'running' state...`);
 
-  let instanceRunning = false;
-  //Add limited number of attempts
-  while (!instanceRunning) {
-    try {
-      const describeParams = {
-        InstanceIds: [instanceId],
-      };
-      // waitUntilInstanceRunning
-      const command = new DescribeInstancesCommand(describeParams);
-      const data = await ec2Client.send(command);
+  try {
+    // Use the built-in waiter to wait for the instance to be running
+    await waitUntilInstanceRunning(
+      {
+        client: ec2Client,
+        // Optional configuration
+        maxWaitTime: 300, // 5 minutes maximum wait time
+        minDelay: 2, // Min seconds between attempts
+        maxDelay: 10, // Max seconds between attempts
+      },
+      { InstanceIds: [instanceId] }
+    );
 
-      const state = data.Reservations?.[0].Instances?.[0].State?.Name;
-      if (!state) {
-        throw new Error("State is undefined");
-      }
-      console.log(`Current instance state: ${state}`);
+    // Once running, get instance details including the public IP
+    const describeCommand = new DescribeInstancesCommand({
+      InstanceIds: [instanceId],
+    });
 
-      if (state === "running") {
-        instanceRunning = true;
-        console.log(`Instance ${instanceId} is now running!`);
+    const data = await ec2Client.send(describeCommand);
+    const instance = data.Reservations?.[0]?.Instances?.[0];
+    const publicIp = instance?.PublicIpAddress;
 
-        // Log the public IP address if available
-        const publicIp = data.Reservations?.[0].Instances?.[0].PublicIpAddress;
-        if (!publicIp) {
-          throw new Error("public ip undefined");
-        }
-        if (publicIp) {
-          console.log(`Public IP address: ${publicIp}`);
-        }
-      } else {
-        // Wait for 5 seconds before checking again
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-      }
-    } catch (err) {
-      console.error("Error checking instance state:", err);
-      throw err;
+    console.log(`Instance ${instanceId} is now running!`);
+
+    if (publicIp) {
+      console.log(`Public IP address: ${publicIp}`);
+    } else {
+      console.log(`No public IP address assigned to instance ${instanceId}`);
     }
+
+    return { instanceId, publicIp };
+  } catch (err) {
+    console.error(`Error waiting for instance ${instanceId} to run:`, err);
+    throw err;
   }
 }
 
@@ -309,7 +395,7 @@ export async function createVpc(
 
   try {
     const createVpcCommand = new CreateVpcCommand({
-      CidrBlock: cidrBlock
+      CidrBlock: cidrBlock,
     });
     const vpcResult = await ec2Client.send(createVpcCommand);
 
@@ -326,11 +412,11 @@ export async function createVpc(
 
 export async function createSubnets(
   vpcId: string,
-  azToCidr: { [az: string]: string }, // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
+  azToCidr: { [az: string]: string } // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
 ): Promise<string[]> {
   const ec2Client = new EC2Client({ region: "us-east-1" });
   const subnetIds: string[] = [];
-  console.log("Creating subnets...")
+  console.log("Creating subnets...");
   for (const [az, cidr] of Object.entries(azToCidr)) {
     const subnetCommand = new CreateSubnetCommand({
       VpcId: vpcId,
@@ -347,7 +433,7 @@ export async function createSubnets(
       console.warn(`Failed to create subnet in ${az}`);
     }
   }
-  console.log("Subnets created!")
+  console.log("Subnets created!");
   return subnetIds;
 }
 
@@ -550,7 +636,7 @@ export async function createSubnetRouteTableAssociations(
   // Initialize the EC2 client
   const ec2Client = new EC2Client({});
   const associationResponses: AssociateRouteTableCommandOutput[] = [];
-  
+
   try {
     // Create association for each subnet
     for (const subnetId of subnetIds) {
@@ -560,16 +646,18 @@ export async function createSubnetRouteTableAssociations(
           RouteTableId: routeTableId,
         })
       );
-      
+
       console.log(
         `Successfully associated subnet ${subnetId} with route table ${routeTableId}`
       );
       console.log(`Association ID: ${associationResponse.AssociationId}`);
-      
+
       associationResponses.push(associationResponse);
     }
-    
-    console.log(`Associated ${subnetIds.length} subnets with route table ${routeTableId}`);
+
+    console.log(
+      `Associated ${subnetIds.length} subnets with route table ${routeTableId}`
+    );
     return associationResponses;
   } catch (error) {
     console.error(
@@ -583,7 +671,7 @@ export async function createSubnetRouteTableAssociations(
 /**
  * Creates a network interface in the specified subnet with the provided security group,
  * and associates an Elastic IP address with it.
- * 
+ *
  * @param subnetId - The subnet ID where the network interface will be created
  * @param securityGroupId - The security group to attach to the network interface
  * @returns A promise resolving to an object containing the network interface ID and public IP address
@@ -593,7 +681,7 @@ export async function createNetworkInterfaceWithPublicIP(
   securityGroupId: string
 ): Promise<{ networkInterfaceId: string; publicIp: string }> {
   const ec2Client = new EC2Client({});
-  
+
   try {
     // Step 1: Create the network interface
     const createResponse = await ec2Client.send(
@@ -602,41 +690,49 @@ export async function createNetworkInterfaceWithPublicIP(
         Groups: [securityGroupId],
       })
     );
-    
-    const networkInterfaceId = createResponse.NetworkInterface?.NetworkInterfaceId;
+
+    const networkInterfaceId =
+      createResponse.NetworkInterface?.NetworkInterfaceId;
     if (!networkInterfaceId) {
       throw new Error("Failed to get network interface ID after creation");
     }
-    
+
     // Step 2: Allocate an Elastic IP
     const allocateResponse = await ec2Client.send(
       new AllocateAddressCommand({
-        Domain: 'vpc'
+        Domain: "vpc",
       })
     );
-    
+
     const allocationId = allocateResponse.AllocationId;
     const publicIp = allocateResponse.PublicIp;
-    
+
     if (!allocationId || !publicIp) {
       throw new Error("Failed to allocate Elastic IP");
     }
-    
-    // Step 3: Associate the Elastic IP with the network interface
+
+    const privateIp = createResponse.NetworkInterface?.PrivateIpAddress;
+    if (!privateIp) {
+      throw new Error("Failed to retrieve private IP from network interface");
+    }
+
     await ec2Client.send(
       new AssociateAddressCommand({
         AllocationId: allocationId,
-        NetworkInterfaceId: networkInterfaceId
+        NetworkInterfaceId: networkInterfaceId,
+        PrivateIpAddress: privateIp,
       })
     );
-    
-    console.log(`Created network interface ${networkInterfaceId} in subnet ${subnetId}`);
+
+    console.log(
+      `Created network interface ${networkInterfaceId} in subnet ${subnetId}`
+    );
     console.log(`Associated Elastic IP ${publicIp} with the network interface`);
-    
+
     // Return both the network interface ID and the public IP
     return {
       networkInterfaceId,
-      publicIp
+      publicIp,
     };
   } catch (error) {
     console.error("Error creating network interface with public IP:", error);
@@ -655,10 +751,10 @@ export async function configureYugabyteNodes(
 ) {
   // Create SSM client
   const ssmClient = new SSMClient({ region });
-  
+
   // Format master addresses as a comma-separated list
   const masterAddressesString = masterAddresses.join(",");
-  
+
   // Command to download the script from GitHub and run it
   const command = `
     # Download replica policy script
@@ -668,20 +764,20 @@ export async function configureYugabyteNodes(
     
     # Run the script
     cd /home/${sshUser}/yugabyte-2024.2.2.2
-    sudo -u ${sshUser} /home/${sshUser}/set_replica_policy.sh ${region} ${zones.join(' ')} ${replicationFactor} '${masterAddressesString}'
+    sudo -u ${sshUser} /home/${sshUser}/set_replica_policy.sh ${region} ${zones} ${replicationFactor} '${masterAddressesString}'
   `;
-  
+
   // Execute the command on the target instance using SSM Run Command
   const response = await ssmClient.send(
     new SendCommandCommand({
       DocumentName: "AWS-RunShellScript",
       InstanceIds: [instanceId],
       Parameters: {
-        commands: [command]
-      }
+        commands: [command],
+      },
     })
   );
-  
+
   return response;
 }
 async function getAmiIdFromSSM(parameterName: string): Promise<string> {

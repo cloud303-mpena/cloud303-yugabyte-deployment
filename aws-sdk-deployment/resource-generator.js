@@ -45,8 +45,8 @@ exports.createSubnets = createSubnets;
 exports.createYugaByteSecurityGroup = createYugaByteSecurityGroup;
 exports.createInternetGatewayAndRouteTable = createInternetGatewayAndRouteTable;
 exports.createSubnetRouteTableAssociations = createSubnetRouteTableAssociations;
-exports.createNetworkInterface = createNetworkInterface;
-exports.configureYugabyteReplication = configureYugabyteReplication;
+exports.createNetworkInterfaceWithPublicIP = createNetworkInterfaceWithPublicIP;
+exports.configureYugabyteNodes = configureYugabyteNodes;
 var client_ec2_1 = require("@aws-sdk/client-ec2");
 var client_ssm_1 = require("@aws-sdk/client-ssm");
 var inquirer_1 = require("inquirer");
@@ -218,7 +218,8 @@ function getPrimaryPrivateIpAddress(networkInterfaceId) {
                 case 2:
                     response = _a.sent();
                     // Check if we got a valid response
-                    if (!response.NetworkInterfaces || response.NetworkInterfaces.length === 0) {
+                    if (!response.NetworkInterfaces ||
+                        response.NetworkInterfaces.length === 0) {
                         throw new Error("Network interface ".concat(networkInterfaceId, " not found"));
                     }
                     primaryPrivateIpAddress = response.NetworkInterfaces[0].PrivateIpAddress;
@@ -244,59 +245,58 @@ function generateUserData(isMasterNode, masterPrivateIps, zone, region, sshUser,
         ? "sudo -u ".concat(sshUser, " /home/").concat(sshUser, "/start_master.sh ").concat(nodePrivateIp, " ").concat(zone, " ").concat(region, " /home/").concat(sshUser, " '").concat(masterAddresses, "'")
         : "sudo -u ".concat(sshUser, " /home/").concat(sshUser, "/start_tserver.sh ").concat(nodePrivateIp, " ").concat(zone, " ").concat(region, " /home/").concat(sshUser, " '").concat(masterAddresses, "'"), "\n");
 }
+/**
+ * Waits for an EC2 instance to reach the 'running' state and logs its public IP.
+ * Uses the built-in AWS SDK waitUntilInstanceRunning waiter.
+ *
+ * @param region - The AWS region where the instance exists
+ * @param instanceId - The ID of the EC2 instance to wait for
+ * @returns A promise that resolves when the instance is running
+ */
 function waitForInstanceRunning(region, instanceId) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, instanceRunning, describeParams, command, data, state, publicIp, err_2;
-        var _a, _b, _c, _d, _e;
-        return __generator(this, function (_f) {
-            switch (_f.label) {
+        var ec2Client, describeCommand, data, instance, publicIp, err_2;
+        var _a, _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client(region);
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     console.log("Waiting for instance ".concat(instanceId, " to be in 'running' state..."));
-                    instanceRunning = false;
-                    _f.label = 1;
+                    _d.label = 1;
                 case 1:
-                    if (!!instanceRunning) return [3 /*break*/, 9];
-                    _f.label = 2;
+                    _d.trys.push([1, 4, , 5]);
+                    // Use the built-in waiter to wait for the instance to be running
+                    return [4 /*yield*/, (0, client_ec2_1.waitUntilInstanceRunning)({
+                            client: ec2Client,
+                            // Optional configuration
+                            maxWaitTime: 300, // 5 minutes maximum wait time
+                            minDelay: 2, // Min seconds between attempts
+                            maxDelay: 10, // Max seconds between attempts
+                        }, { InstanceIds: [instanceId] })];
                 case 2:
-                    _f.trys.push([2, 7, , 8]);
-                    describeParams = {
+                    // Use the built-in waiter to wait for the instance to be running
+                    _d.sent();
+                    describeCommand = new client_ec2_1.DescribeInstancesCommand({
                         InstanceIds: [instanceId],
-                    };
-                    command = new client_ec2_1.DescribeInstancesCommand(describeParams);
-                    return [4 /*yield*/, ec2Client.send(command)];
+                    });
+                    return [4 /*yield*/, ec2Client.send(describeCommand)];
                 case 3:
-                    data = _f.sent();
-                    state = (_c = (_b = (_a = data.Reservations) === null || _a === void 0 ? void 0 : _a[0].Instances) === null || _b === void 0 ? void 0 : _b[0].State) === null || _c === void 0 ? void 0 : _c.Name;
-                    if (!state) {
-                        throw new Error("State is undefined");
-                    }
-                    console.log("Current instance state: ".concat(state));
-                    if (!(state === "running")) return [3 /*break*/, 4];
-                    instanceRunning = true;
+                    data = _d.sent();
+                    instance = (_c = (_b = (_a = data.Reservations) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.Instances) === null || _c === void 0 ? void 0 : _c[0];
+                    publicIp = instance === null || instance === void 0 ? void 0 : instance.PublicIpAddress;
                     console.log("Instance ".concat(instanceId, " is now running!"));
-                    publicIp = (_e = (_d = data.Reservations) === null || _d === void 0 ? void 0 : _d[0].Instances) === null || _e === void 0 ? void 0 : _e[0].PublicIpAddress;
-                    if (!publicIp) {
-                        throw new Error("public ip undefined");
-                    }
                     if (publicIp) {
                         console.log("Public IP address: ".concat(publicIp));
                     }
-                    return [3 /*break*/, 6];
-                case 4: 
-                // Wait for 5 seconds before checking again
-                return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 5000); })];
-                case 5:
-                    // Wait for 5 seconds before checking again
-                    _f.sent();
-                    _f.label = 6;
-                case 6: return [3 /*break*/, 8];
-                case 7:
-                    err_2 = _f.sent();
-                    console.error("Error checking instance state:", err_2);
+                    else {
+                        console.log("No public IP address assigned to instance ".concat(instanceId));
+                    }
+                    return [2 /*return*/, { instanceId: instanceId, publicIp: publicIp }];
+                case 4:
+                    err_2 = _d.sent();
+                    console.error("Error waiting for instance ".concat(instanceId, " to run:"), err_2);
                     throw err_2;
-                case 8: return [3 /*break*/, 1];
-                case 9: return [2 /*return*/];
+                case 5: return [2 /*return*/];
             }
         });
     });
@@ -313,7 +313,7 @@ function createVpc(cidrBlock, name) {
                 case 1:
                     _b.trys.push([1, 3, , 4]);
                     createVpcCommand = new client_ec2_1.CreateVpcCommand({
-                        CidrBlock: cidrBlock
+                        CidrBlock: cidrBlock,
                     });
                     return [4 /*yield*/, ec2Client.send(createVpcCommand)];
                 case 2:
@@ -332,7 +332,8 @@ function createVpc(cidrBlock, name) {
         });
     });
 }
-function createSubnets(vpcId, azToCidr) {
+function createSubnets(vpcId, azToCidr // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
+) {
     return __awaiter(this, void 0, void 0, function () {
         var ec2Client, subnetIds, _i, _a, _b, az, cidr, subnetCommand, result, subnetId;
         var _c;
@@ -595,60 +596,88 @@ function createSubnetRouteTableAssociations(subnetIds, routeTableId) {
     });
 }
 /**
- * Creates a network interface in the specified subnet with a single security group
- * @param subnetId - The ID of the subnet where the network interface will be created
- * @param securityGroupId - Security group ID to assign to the network interface
- * @returns Promise resolving to the network interface ID
+ * Creates a network interface in the specified subnet with the provided security group,
+ * and associates an Elastic IP address with it.
+ *
+ * @param subnetId - The subnet ID where the network interface will be created
+ * @param securityGroupId - The security group to attach to the network interface
+ * @returns A promise resolving to an object containing the network interface ID and public IP address
  */
-function createNetworkInterface(subnetId, securityGroupId) {
+function createNetworkInterfaceWithPublicIP(subnetId, securityGroupId) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, response, networkInterfaceId, error_5;
-        var _a;
-        return __generator(this, function (_b) {
-            switch (_b.label) {
+        var ec2Client, createResponse, networkInterfaceId, allocateResponse, allocationId, publicIp, privateIp, error_5;
+        var _a, _b;
+        return __generator(this, function (_c) {
+            switch (_c.label) {
                 case 0:
                     ec2Client = new client_ec2_1.EC2Client({});
-                    _b.label = 1;
+                    _c.label = 1;
                 case 1:
-                    _b.trys.push([1, 3, , 4]);
+                    _c.trys.push([1, 5, , 6]);
                     return [4 /*yield*/, ec2Client.send(new client_ec2_1.CreateNetworkInterfaceCommand({
                             SubnetId: subnetId,
                             Groups: [securityGroupId],
                         }))];
                 case 2:
-                    response = _b.sent();
-                    networkInterfaceId = (_a = response.NetworkInterface) === null || _a === void 0 ? void 0 : _a.NetworkInterfaceId;
+                    createResponse = _c.sent();
+                    networkInterfaceId = (_a = createResponse.NetworkInterface) === null || _a === void 0 ? void 0 : _a.NetworkInterfaceId;
                     if (!networkInterfaceId) {
                         throw new Error("Failed to get network interface ID after creation");
                     }
-                    console.log("Created network interface ".concat(networkInterfaceId, " in subnet ").concat(subnetId));
-                    return [2 /*return*/, networkInterfaceId];
+                    return [4 /*yield*/, ec2Client.send(new client_ec2_1.AllocateAddressCommand({
+                            Domain: "vpc",
+                        }))];
                 case 3:
-                    error_5 = _b.sent();
-                    console.error("Error creating network interface:", error_5);
+                    allocateResponse = _c.sent();
+                    allocationId = allocateResponse.AllocationId;
+                    publicIp = allocateResponse.PublicIp;
+                    if (!allocationId || !publicIp) {
+                        throw new Error("Failed to allocate Elastic IP");
+                    }
+                    privateIp = (_b = createResponse.NetworkInterface) === null || _b === void 0 ? void 0 : _b.PrivateIpAddress;
+                    if (!privateIp) {
+                        throw new Error("Failed to retrieve private IP from network interface");
+                    }
+                    return [4 /*yield*/, ec2Client.send(new client_ec2_1.AssociateAddressCommand({
+                            AllocationId: allocationId,
+                            NetworkInterfaceId: networkInterfaceId,
+                            PrivateIpAddress: privateIp,
+                        }))];
+                case 4:
+                    _c.sent();
+                    console.log("Created network interface ".concat(networkInterfaceId, " in subnet ").concat(subnetId));
+                    console.log("Associated Elastic IP ".concat(publicIp, " with the network interface"));
+                    // Return both the network interface ID and the public IP
+                    return [2 /*return*/, {
+                            networkInterfaceId: networkInterfaceId,
+                            publicIp: publicIp,
+                        }];
+                case 5:
+                    error_5 = _c.sent();
+                    console.error("Error creating network interface with public IP:", error_5);
                     throw error_5;
-                case 4: return [2 /*return*/];
+                case 6: return [2 /*return*/];
             }
         });
     });
 }
-function configureYugabyteReplication(instanceId_1, sshUser_1, region_1, zones_1, masterAddresses_1) {
+function configureYugabyteNodes(instanceId_1, sshUser_1, region_1, zones_1, masterAddresses_1) {
     return __awaiter(this, arguments, void 0, function (instanceId, sshUser, region, zones, masterAddresses, replicationFactor, scriptUrl) {
         var ssmClient, masterAddressesString, command, response;
         if (replicationFactor === void 0) { replicationFactor = 3; }
-        if (scriptUrl === void 0) { scriptUrl = "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/set_replica_policy.sh"; }
+        if (scriptUrl === void 0) { scriptUrl = "https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/modify_placement.sh"; }
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     ssmClient = new client_ssm_1.SSMClient({ region: region });
                     masterAddressesString = masterAddresses.join(",");
-                    command = "\n    # Download replica policy script\n    cd /home/".concat(sshUser, "\n    curl -o set_replica_policy.sh ").concat(scriptUrl, "\n    chmod +x set_replica_policy.sh\n    \n    # Run the script\n    cd /home/").concat(sshUser, "/yugabyte-2024.2.2.2\n    sudo -u ").concat(sshUser, " /home/").concat(sshUser, "/set_replica_policy.sh ").concat(region, " ").concat(zones.join(' '), " ").concat(replicationFactor, " '").concat(masterAddressesString, "'\n  ");
+                    command = "\n    # Download replica policy script\n    cd /home/".concat(sshUser, "\n    curl -o set_replica_policy.sh ").concat(scriptUrl, "\n    chmod +x set_replica_policy.sh\n    \n    # Run the script\n    cd /home/").concat(sshUser, "/yugabyte-2024.2.2.2\n    sudo -u ").concat(sshUser, " /home/").concat(sshUser, "/set_replica_policy.sh ").concat(region, " ").concat(zones, " ").concat(replicationFactor, " '").concat(masterAddressesString, "'\n  ");
                     return [4 /*yield*/, ssmClient.send(new client_ssm_1.SendCommandCommand({
                             DocumentName: "AWS-RunShellScript",
                             InstanceIds: [instanceId],
                             Parameters: {
-                                commands: [command]
-                            }
+                                commands: [command],
+                            },
                         }))];
                 case 1:
                     response = _a.sent();
