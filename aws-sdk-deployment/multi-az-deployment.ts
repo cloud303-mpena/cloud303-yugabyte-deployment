@@ -48,7 +48,7 @@ async function deployMultiAZ(): Promise<string> {
       subnetId,
       securityGroupId
     );
-    netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
+    netIntIds.push(currNetIntIdAndIp.networkInterfaceId); // This is correct!
     elasticIps.push(currNetIntIdAndIp.publicIp);
   }
   //TODO: make sure it doesnt exist 

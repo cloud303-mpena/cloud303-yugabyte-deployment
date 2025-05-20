@@ -187,12 +187,12 @@ function promptForParams() {
 }
 /**
  * Creates an EC2 instance in the network interface it is passed.
- * Sets up user data to isntall necessary libraries, start necessary tools, and initialize tserver and master server
+ * Sets up user data to install necessary libraries, start necessary tools, and initialize tserver and master server
  *
  */
-function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, securityGroup_1, netIntId_1, vpcId_1) {
-    return __awaiter(this, arguments, void 0, function (region, instanceType, imageId, keyName, securityGroup, netIntId, vpcId, isMasterNode, masterNetIntIds, zone, sshUser) {
-        var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
+function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_1, securityGroup_1, netIntId_1, vpcId_1) {
+    return __awaiter(this, arguments, void 0, function (name, region, instanceType, imageId, keyName, securityGroup, netIntId, vpcId, isMasterNode, masterNetIntIds, zone, sshUser) {
+        var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, iamInstanceProfileSpec, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
         var _a;
         var _b;
         if (isMasterNode === void 0) { isMasterNode = false; }
@@ -221,13 +221,16 @@ function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, secur
                     return [4 /*yield*/, Promise.all(masterNetIntIds.map(function (id) { return getPrimaryPrivateIpAddress(id); }))];
                 case 3:
                     masterPrivateIps = _c.sent();
+                    iamInstanceProfileSpec = {
+                        Name: name
+                    };
                     _a = {};
                     return [4 /*yield*/, getAmiIdFromSSM(imageId)];
                 case 4:
                     instanceParams = (_a.ImageId = _c.sent(),
                         _a.InstanceType = instanceType,
                         _a.IamInstanceProfile = {
-                            Name: "SSMPermissionRole",
+                            iamInstanceProfileSpec: iamInstanceProfileSpec
                         },
                         _a.MinCount = 1,
                         _a.MaxCount = 1,

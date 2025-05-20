@@ -165,7 +165,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
 }
 /**
  * Creates an EC2 instance in the network interface it is passed.
- * Sets up user data to isntall necessary libraries, start necessary tools, and initialize tserver and master server
+ * Sets up user data to install necessary libraries, start necessary tools, and initialize tserver and master server
  * 
  */
 export async function createEC2Instance(
@@ -208,9 +208,8 @@ export async function createEC2Instance(
     const instanceParams = {
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
-      IamInstanceProfile: {
-        iamInstanceProfileSpec
-      },
+      IamInstanceProfile: iamInstanceProfileSpec,
+
 
       MinCount: 1,
       MaxCount: 1,
