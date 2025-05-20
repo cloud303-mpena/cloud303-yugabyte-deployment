@@ -20,6 +20,7 @@ import {
   waitUntilInstanceRunning,
   AllocateAddressCommand,
   AssociateAddressCommand,
+  IamInstanceProfileSpecification,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -168,6 +169,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
  * 
  */
 export async function createEC2Instance(
+  name: string,
   region: string,
   instanceType: string,
   imageId: string,
@@ -199,11 +201,15 @@ export async function createEC2Instance(
     );
 
     //LOOK HERE!!
+    const iamInstanceProfileSpec: IamInstanceProfileSpecification = {
+      Name: name
+    };
+
     const instanceParams = {
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
       IamInstanceProfile: {
-        Name: "SSMPermissionRole",
+        iamInstanceProfileSpec
       },
 
       MinCount: 1,

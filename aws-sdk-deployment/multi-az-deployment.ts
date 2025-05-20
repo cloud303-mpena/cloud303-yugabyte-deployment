@@ -67,6 +67,7 @@ async function deployMultiAZ(): Promise<string> {
   for (let i = 0; i < params.RFFactor; i++) {
     ec2InstanceInfo.push(
       resGen.createEC2Instance(
+          `yugabyte-${i}`,
         "us-east-1",
         params.InstanceType,
         params.LatestAmiId,
