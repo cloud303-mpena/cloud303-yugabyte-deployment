@@ -39,7 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var resGen = require("./resource-generator");
 function deployMultiAZ() {
     return __awaiter(this, void 0, void 0, function () {
-        var params, vpcId, azToCidr, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, elasticIps, _i, subnetIds_1, subnetId, currNetIntIdAndIp, azs, ec2InstanceInfo, masterPrivateIpAddresses, i, instances, firstInstance;
+        var params, vpcId, azToCidr, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, elasticIps, _i, subnetIds_1, subnetId, currNetIntIdAndIp, rolename, azs, ec2InstanceInfo, masterPrivateIpAddresses, i, instances, firstInstance;
         var _this = this;
         return __generator(this, function (_a) {
             switch (_a.label) {
@@ -84,7 +84,9 @@ function deployMultiAZ() {
                 case 9:
                     _i++;
                     return [3 /*break*/, 7];
-                case 10:
+                case 10: return [4 /*yield*/, resGen.createSSMInstanceRole("SSMPermissionRole")];
+                case 11:
+                    rolename = _a.sent();
                     azs = Object.keys(azToCidr);
                     ec2InstanceInfo = [];
                     masterPrivateIpAddresses = [];
@@ -102,10 +104,10 @@ function deployMultiAZ() {
                                 }
                             });
                         }); }))];
-                case 11:
+                case 12:
                     _a.sent();
                     return [4 /*yield*/, Promise.all(ec2InstanceInfo)];
-                case 12:
+                case 13:
                     instances = _a.sent();
                     instances.forEach(function (_a) {
                         var privateIpAddress = _a.privateIpAddress, isMasterNode = _a.isMasterNode;
@@ -127,10 +129,10 @@ function deployMultiAZ() {
                     // );
                     console.log("Not running, trying again");
                     return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 10000); })];
-                case 13:
+                case 14:
                     _a.sent();
                     return [4 /*yield*/, ec2InstanceInfo[0]];
-                case 14:
+                case 15:
                     firstInstance = _a.sent();
                     console.log("View YB UI at: http://".concat(firstInstance.publicIp, ":7000"));
                     return [2 /*return*/, ""];

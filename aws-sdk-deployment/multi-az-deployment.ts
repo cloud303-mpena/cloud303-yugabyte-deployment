@@ -51,8 +51,8 @@ async function deployMultiAZ(): Promise<string> {
     netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
     elasticIps.push(currNetIntIdAndIp.publicIp);
   }
-
-  resGen.createSSMInstanceRole("SSMPermissionRole")
+  //TODO: make sure it doesnt exist 
+  const rolename = await resGen.createSSMInstanceRole("SSMPermissionRole")
 
   const azs = Object.keys(azToCidr);
 

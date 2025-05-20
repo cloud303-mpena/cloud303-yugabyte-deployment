@@ -87,6 +87,8 @@ export async function createSSMInstanceRole(roleName: string) {
   );
 
   console.log(`Created EC2 IAM role and instance profile: ${roleName}`);
+
+  return roleName;
 }
 
 const DEFAULTS: YugabyteParams = {
@@ -121,6 +123,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
       type: "input",
       name: "KeyName",
       message: "KeyName (required)",
+      default: "Key",
       validate: (input) => (input ? true : "KeyName is required."),
     },
     {
@@ -148,21 +151,22 @@ export async function promptForParams(): Promise<YugabyteParams> {
       message: "Select Deployment Type",
       choices: DEPLOYMENT_TYPES,
       default: DEFAULTS.DeploymentType,
-    },
+     },
+    {
+      type: "input",
+      name: "Region",
+      message: "Region",
+      default: DEFAULTS.Region,
+     },
   ]);
 
   return answers as YugabyteParams;
 }
-
-// // Example usage
-// promptForParams()
-//   .then((params) => {
-//     console.log("Collected parameters:", params);
-//   })
-//   .catch((err) => {
-//     console.error(err.message);
-//   });
-
+/**
+ * Creates an EC2 instance in the network interface it is passed.
+ * Sets up user data to isntall necessary libraries, start necessary tools, and initialize tserver and master server
+ * 
+ */
 export async function createEC2Instance(
   region: string,
   instanceType: string,
@@ -177,9 +181,7 @@ export async function createEC2Instance(
   sshUser: string = "ubuntu"
 ) {
   const ec2Client = new EC2Client({ region });
-  try {
-    // Configure the instance parameters with correct types
-    const blockDeviceMappings: BlockDeviceMapping[] = [
+  try {    const blockDeviceMappings: BlockDeviceMapping[] = [
       {
         DeviceName: "/dev/xvda",
         Ebs: {
@@ -190,16 +192,18 @@ export async function createEC2Instance(
       },
     ];
 
-    //set up paramaters for ec2 creation
+    //gets internal ip addresses from other nodes
     const nodePrivateIp = await getPrimaryPrivateIpAddress(netIntId);
     const masterPrivateIps = await Promise.all(
       masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(id))
     );
+
+    //LOOK HERE!!
     const instanceParams = {
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
       IamInstanceProfile: {
-        Name: "SSMPermissionRole", // same as what you passed to `createSSMInstanceRole`
+        Name: "SSMPermissionRole",
       },
 
       MinCount: 1,
@@ -216,7 +220,7 @@ export async function createEC2Instance(
         generateUserData(
           isMasterNode,
           masterPrivateIps,
-          zone || `${region}a`, // Default to first AZ if not specified
+          zone || `${region}a`,
           region,
           sshUser,
           nodePrivateIp

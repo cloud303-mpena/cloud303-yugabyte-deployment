@@ -36,6 +36,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.createSSMInstanceRole = createSSMInstanceRole;
 exports.promptForParams = promptForParams;
 exports.createEC2Instance = createEC2Instance;
 exports.getPrimaryPrivateIpAddress = getPrimaryPrivateIpAddress;
@@ -50,6 +51,63 @@ exports.configureYugabyteNodes = configureYugabyteNodes;
 var client_ec2_1 = require("@aws-sdk/client-ec2");
 var client_ssm_1 = require("@aws-sdk/client-ssm");
 var inquirer_1 = require("inquirer");
+var client_iam_1 = require("@aws-sdk/client-iam");
+function createSSMInstanceRole(roleName) {
+    return __awaiter(this, void 0, void 0, function () {
+        var iamClient, assumeRolePolicyDocument;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    iamClient = new client_iam_1.IAMClient({ region: "us-east-1" });
+                    assumeRolePolicyDocument = JSON.stringify({
+                        Version: "2012-10-17",
+                        Statement: [
+                            {
+                                Effect: "Allow",
+                                Principal: {
+                                    Service: "ec2.amazonaws.com",
+                                },
+                                Action: "sts:AssumeRole",
+                            },
+                        ],
+                    });
+                    // 1. Create IAM Role
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.CreateRoleCommand({
+                            RoleName: roleName,
+                            AssumeRolePolicyDocument: assumeRolePolicyDocument,
+                        }))];
+                case 1:
+                    // 1. Create IAM Role
+                    _a.sent();
+                    // 2. Attach AmazonSSMManagedInstanceCore Policy
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.AttachRolePolicyCommand({
+                            RoleName: roleName,
+                            PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                        }))];
+                case 2:
+                    // 2. Attach AmazonSSMManagedInstanceCore Policy
+                    _a.sent();
+                    // 3. Create Instance Profile (required for EC2 attachment)
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.CreateInstanceProfileCommand({
+                            InstanceProfileName: roleName,
+                        }))];
+                case 3:
+                    // 3. Create Instance Profile (required for EC2 attachment)
+                    _a.sent();
+                    // 4. Add Role to Instance Profile
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.AddRoleToInstanceProfileCommand({
+                            InstanceProfileName: roleName,
+                            RoleName: roleName,
+                        }))];
+                case 4:
+                    // 4. Add Role to Instance Profile
+                    _a.sent();
+                    console.log("Created EC2 IAM role and instance profile: ".concat(roleName));
+                    return [2 /*return*/, roleName];
+            }
+        });
+    });
+}
 var DEFAULTS = {
     DBVersion: "2024.2.2.1-b190",
     RFFactor: 3,
@@ -58,6 +116,7 @@ var DEFAULTS = {
     LatestAmiId: "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
     SshUser: "ubuntu",
     DeploymentType: "Multi-AZ",
+    Region: "us-east-1"
 };
 var INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
 var DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
@@ -83,6 +142,7 @@ function promptForParams() {
                             type: "input",
                             name: "KeyName",
                             message: "KeyName (required)",
+                            default: "Key",
                             validate: function (input) { return (input ? true : "KeyName is required."); },
                         },
                         {
@@ -111,6 +171,12 @@ function promptForParams() {
                             choices: DEPLOYMENT_TYPES,
                             default: DEFAULTS.DeploymentType,
                         },
+                        {
+                            type: "input",
+                            name: "Region",
+                            message: "Region",
+                            default: DEFAULTS.Region,
+                        },
                     ])];
                 case 1:
                     answers = _a.sent();
@@ -119,14 +185,11 @@ function promptForParams() {
         });
     });
 }
-// // Example usage
-// promptForParams()
-//   .then((params) => {
-//     console.log("Collected parameters:", params);
-//   })
-//   .catch((err) => {
-//     console.error(err.message);
-//   });
+/**
+ * Creates an EC2 instance in the network interface it is passed.
+ * Sets up user data to isntall necessary libraries, start necessary tools, and initialize tserver and master server
+ *
+ */
 function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, securityGroup_1, netIntId_1, vpcId_1) {
     return __awaiter(this, arguments, void 0, function (region, instanceType, imageId, keyName, securityGroup, netIntId, vpcId, isMasterNode, masterNetIntIds, zone, sshUser) {
         var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
@@ -163,6 +226,9 @@ function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, secur
                 case 4:
                     instanceParams = (_a.ImageId = _c.sent(),
                         _a.InstanceType = instanceType,
+                        _a.IamInstanceProfile = {
+                            Name: "SSMPermissionRole",
+                        },
                         _a.MinCount = 1,
                         _a.MaxCount = 1,
                         _a.KeyName = keyName,
@@ -173,8 +239,7 @@ function createEC2Instance(region_1, instanceType_1, imageId_1, keyName_1, secur
                             },
                         ],
                         _a.BlockDeviceMappings = blockDeviceMappings,
-                        _a.UserData = Buffer.from(generateUserData(isMasterNode, masterPrivateIps, zone || "".concat(region, "a"), // Default to first AZ if not specified
-                        region, sshUser, nodePrivateIp)).toString("base64"),
+                        _a.UserData = Buffer.from(generateUserData(isMasterNode, masterPrivateIps, zone || "".concat(region, "a"), region, sshUser, nodePrivateIp)).toString("base64"),
                         _a);
                     command = new client_ec2_1.RunInstancesCommand(instanceParams);
                     return [4 /*yield*/, ec2Client.send(command)];
