@@ -669,28 +669,28 @@ export async function createYugaByteSecurityGroup(
         IpProtocol: "tcp",
         FromPort: 9100,
         ToPort: 9100,
-        IpRanges: [{ CidrIp: vpcCidr }],
+        IpRanges: [{ CidrIp: "0.0.0.0/0" }],
       },
       // YEDIS port
       {
         IpProtocol: "tcp",
         FromPort: 6379,
         ToPort: 6379,
-        IpRanges: [{ CidrIp: vpcCidr }],
+        IpRanges: [{ CidrIp: "0.0.0.0/0" }],
       },
       // YSQL port
       {
         IpProtocol: "tcp",
         FromPort: 5433,
         ToPort: 5433,
-        IpRanges: [{ CidrIp: vpcCidr }],
+        IpRanges: [{ CidrIp: "0.0.0.0/0" }],
       },
       // YCQL port
       {
         IpProtocol: "tcp",
         FromPort: 9042,
         ToPort: 9042,
-        IpRanges: [{ CidrIp: vpcCidr }],
+        IpRanges: [{ CidrIp: "0.0.0.0/0" }],
       },
     ];
 
