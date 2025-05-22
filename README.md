@@ -1,4 +1,9 @@
-# AWS CloudFormation
+# Cloud303 Yugabyte Deployments
+This repo is comprised of a cloudformation version and an AWS SDK Typescript version of the yugabyte deployment code.
+# AWS SDK
+//TODO: Write Documentation
+
+# Cloudformation
 This repo is a reconstruction of Yugabyte's setup repo. Major changes are as follows:
   * Reconstructed installation and initialization scripts to automate the manual installation from the YB docs
   * Switched from Amazon Linux to Ubuntu
