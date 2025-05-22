@@ -22,6 +22,7 @@ import {
   AssociateAddressCommand,
   IamInstanceProfileSpecification,
   AssociateIamInstanceProfileCommand,
+  DescribeAvailabilityZonesCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -43,6 +44,7 @@ import {
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
   RFFactor: 3,
+  NumberOfNodes: 3,
   KeyName: "",
   InstanceType: "t3.medium",
   LatestAmiId:
@@ -54,10 +56,9 @@ const DEFAULTS: YugabyteParams = {
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
 const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
-
 /**
  * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
- * 
+ *
  * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
  */
 export async function promptForParams(): Promise<YugabyteParams> {
@@ -70,9 +71,17 @@ export async function promptForParams(): Promise<YugabyteParams> {
     },
     {
       type: "input",
+      name: "NumberOfNodes",
+      message: `Number of Nodes`,
+      default: String(DEFAULTS.NumberOfNodes),
+    },
+    {
+      type: "input",
       name: "RFFactor",
       message: `RFFactor`,
       default: String(DEFAULTS.RFFactor),
+      //RF must be odd
+      validate: (input) => (parseInt(input, 10) % 2 == 1)
     },
     {
       type: "input",
@@ -118,8 +127,16 @@ export async function promptForParams(): Promise<YugabyteParams> {
   return answers as YugabyteParams;
 }
 /**
+ * Initializes EC2 client in the right region
+* @param {region} - region to initialize the client in
+* 
+*/
+// export async function initEC2Client(region: string) {
+//   ec2Client = new EC2Client({region: region})
+// }
+/**
  * Creates an IAM role and instance profile with SSM permissions for EC2 instances.
- * 
+ *
  * This function performs the following operations:
  * 1. Creates an IAM role with EC2 trust relationship
  * 2. Attaches the AmazonSSMManagedInstanceCore policy to the role
@@ -132,7 +149,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
  * @throws {Error} If any of the IAM operations fail during role or profile creation
  */
 export async function createSSMInstanceRole(roleName: string): Promise<string> {
-  const iamClient = new IAMClient({ region: "us-east-1" });
+  const iamClient = new IAMClient();
   //Trust policy for EC2
   const assumeRolePolicyDocument = JSON.stringify({
     Version: "2012-10-17",
@@ -146,58 +163,60 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
       },
     ],
   });
+  try {
+    // Create IAM Role
+    await iamClient.send(
+      new CreateRoleCommand({
+        RoleName: roleName,
+        AssumeRolePolicyDocument: assumeRolePolicyDocument,
+      })
+    );
 
-  // Create IAM Role
-  await iamClient.send(
-    new CreateRoleCommand({
-      RoleName: roleName,
-      AssumeRolePolicyDocument: assumeRolePolicyDocument,
-    })
-  );
+    // Attach AmazonSSMManagedInstanceCore Policy
+    await iamClient.send(
+      new AttachRolePolicyCommand({
+        RoleName: roleName,
+        PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+      })
+    );
 
-  // Attach AmazonSSMManagedInstanceCore Policy
-  await iamClient.send(
-    new AttachRolePolicyCommand({
-      RoleName: roleName,
-      PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-    })
-  );
+    // Create Instance Profile (required for EC2 attachment)
+    await iamClient.send(
+      new CreateInstanceProfileCommand({
+        InstanceProfileName: roleName,
+      })
+    );
 
-  // Create Instance Profile (required for EC2 attachment)
-  await iamClient.send(
-    new CreateInstanceProfileCommand({
-      InstanceProfileName: roleName,
-    })
-  );
+    // Add Role to Instance Profile
+    await iamClient.send(
+      new AddRoleToInstanceProfileCommand({
+        InstanceProfileName: roleName,
+        RoleName: roleName,
+      })
+    );
 
-  // Add Role to Instance Profile
-  await iamClient.send(
-    new AddRoleToInstanceProfileCommand({
-      InstanceProfileName: roleName,
-      RoleName: roleName,
-    })
-  );
+    // Get the instance profile to retrieve its ARN
+    const getInstanceProfileResponse = await iamClient.send(
+      new GetInstanceProfileCommand({
+        InstanceProfileName: roleName,
+      })
+    );
 
-  // Get the instance profile to retrieve its ARN
-  const getInstanceProfileResponse = await iamClient.send(
-    new GetInstanceProfileCommand({
-      InstanceProfileName: roleName,
-    })
-  );
+    const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
+    console.log(
+      `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
+    );
 
-  const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
-
-  console.log(
-    `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
-  );
-
-  return instanceProfileArn || "";
+    return instanceProfileArn || "";
+  } catch (error) {
+    console.error(`Error making instance profile: ${error}`)
+    return ""
+  }
 }
-
 
 /**
  * Creates an EC2 instance with specified configurations and waits until it is running.
- * 
+ *
  * @param {string} name - The name to assign to the EC2 instance.
  * @param {string} region - The AWS region where the instance will be created.
  * @param {string} instanceType - The type of instance to create (e.g., t2.micro).
@@ -208,10 +227,10 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
  * @param {string[]} masterNetIntIds - List of network interface IDs for master nodes.
  * @param {string} zone - The availability zone for the instance.
  * @param {string} sshUser - The SSH username for accessing the instance.
- * 
- * @returns {Promise<{instanceId: string, privateIpAddress: string, isMasterNode: boolean}>} 
+ *
+ * @returns {Promise<{instanceId: string, privateIpAddress: string, isMasterNode: boolean}>}
  * An object containing the instance ID, private IP address, and master node status.
- * 
+ *
  * @throws Will throw an error if the instance creation fails.
  */
 export async function createEC2Instance(
@@ -240,9 +259,9 @@ export async function createEC2Instance(
     ];
 
     //gets internal ip addresses from other nodes
-    const nodePrivateIp = await getPrimaryPrivateIpAddress(netIntId);
+    const nodePrivateIp = await getPrimaryPrivateIpAddress(region, netIntId);
     const masterPrivateIps = await Promise.all(
-      masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(id, false))
+      masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(region, id, false))
     );
 
     const instanceParams = {
@@ -282,8 +301,11 @@ export async function createEC2Instance(
 
     console.log(`Successfully created EC2 instance with ID: ${instanceId}`);
     console.log(`Instance is ${isMasterNode ? "a MASTER" : "a TSERVER"} node`);
-    console.log('Waiting for running state...')
-    await waitUntilInstanceRunning({ client: ec2Client, maxWaitTime: 1000 }, { InstanceIds: [instanceId!] })
+    console.log("Waiting for running state...");
+    await waitUntilInstanceRunning(
+      { client: ec2Client, maxWaitTime: 1000 },
+      { InstanceIds: [instanceId!] }
+    );
     console.log(`Instance ${name} is running!`);
     if (!instanceId) {
       throw new Error("Instance ID is undefined.");
@@ -301,20 +323,23 @@ export async function createEC2Instance(
 }
 /**
  * Associates an IAM instance profile with a specified EC2 instance.
- * 
+ *
  * @param {string} instanceId - The ID of the EC2 instance to associate with the instance profile.
  * @param {string} instanceProfileArn - The ARN of the IAM instance profile to associate with the EC2 instance.
- * 
+ * @param {string} region - region of where the ec2 instance lives
  * @returns {Promise<void>} A promise that resolves when the association is complete.
- * 
- * This function logs the association process and uses the AWS SDK to send the 
+ *
+ * This function logs the association process and uses the AWS SDK to send the
  */
 export async function associateInstanceProfileWithEc2(
   instanceId: string,
-  instanceProfileArn: string
+  instanceProfileArn: string,
+  region: string
 ) {
-  console.log(`Associating instance ${instanceId} with instance profile ${instanceProfileArn}`)
-  const ec2Client = new EC2Client({ region: "us-east-1" });
+  console.log(
+    `Associating instance ${instanceId} with instance profile ${instanceProfileArn}`
+  );
+  const ec2Client = new EC2Client({ region: region});
   await ec2Client.send(
     new AssociateIamInstanceProfileCommand({
       IamInstanceProfile: {
@@ -327,21 +352,23 @@ export async function associateInstanceProfileWithEc2(
 
 /**
  * Retrieves the primary private IP address associated with a specified network interface.
- * 
+ *
  * @param {string} networkInterfaceId - The ID of the network interface to query.
  * @param {boolean} doPrint - Whether or not to print the ip
+ * @param {string} region - Region to initialize ec2Client
  * @returns {Promise<string>} A promise that resolves to the primary private IP address of the network interface.
- * 
+ *
  * @throws Will throw an error if the network interface is not found or if no primary private IP address is available.
- * 
+ *
  * This function utilizes the EC2 client to send a DescribeNetworkInterfacesCommand and logs the process.
  */
 export async function getPrimaryPrivateIpAddress(
+  region: string,
   networkInterfaceId: string,
   doPrint: boolean = true
 ): Promise<string> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({});
+  const ec2Client = new EC2Client({region});
 
   try {
     // Request details about the network interface
@@ -368,7 +395,7 @@ export async function getPrimaryPrivateIpAddress(
         `No primary private IP address found for network interface ${networkInterfaceId}`
       );
     }
-    if(doPrint){
+    if (doPrint) {
       console.log(
         `Primary private IP address for ${networkInterfaceId}: ${primaryPrivateIpAddress}`
       );
@@ -384,7 +411,7 @@ export async function getPrimaryPrivateIpAddress(
 }
 /**
  * Generates user data script for EC2 instances in a cluster configuration.
- * 
+ *
  * Creates a customized initialization script based on whether the node is a master node
  * or a worker node, incorporating network configuration, and SSH access.
  *
@@ -395,7 +422,7 @@ export async function getPrimaryPrivateIpAddress(
  * @param {string} sshUser - The username for SSH access to be configured on the instance
  * @param {string} nodePrivateIp - The private IP address of the node being configured
  * @returns {string} Base64 encoded user-data script for initialization
- * 
+ *
  */
 function generateUserData(
   isMasterNode: boolean,
@@ -450,7 +477,7 @@ export async function waitForInstanceRunning(
   region: string,
   instanceId: string
 ) {
-  const ec2Client = new EC2Client({ region });
+  const ec2Client = new EC2Client({ region: region });
   console.log(`Waiting for instance ${instanceId} to be in 'running' state...`);
 
   try {
@@ -492,15 +519,15 @@ export async function waitForInstanceRunning(
 
 /**
  * Creates an AWS VPC with the specified CIDR block and name tag.
- *
+ * @param {string} region - region to deploy the VPC in
  * @param {string} cidrBlock - The IPv4 CIDR block for the VPC
- * @param {string} name - The name to assign to the VPC via tagging
  * @returns {Promise<string | undefined>} The ID of the created VPC or undefined if creation fails
  */
 export async function createVpc(
-  cidrBlock: string,
+  region: string,
+  cidrBlock: string
 ): Promise<string | undefined> {
-  const ec2Client = new EC2Client({ region: "us-east-1" });
+  const ec2Client = new EC2Client({ region: region});
 
   try {
     const createVpcCommand = new CreateVpcCommand({
@@ -519,33 +546,35 @@ export async function createVpc(
   }
 }
 /**
- * Creates multiple subnets in the specified VPC across different availability zones.
+ * Creates subnets in the specified VPC using a mapping of CIDR blocks to availability zones.
  *
  * @param {string} vpcId - The ID of the VPC where subnets will be created
- * @param {Object} azToCidr - Mapping of availability zones to CIDR blocks
+ * @param {string} region - Region to initialize ec2Client
+ * @param {Object} cidrToAZ - Mapping of CIDR blocks to availability zones
  * @returns {Promise<string[]>} Array of created subnet IDs
  */
 export async function createSubnets(
   vpcId: string,
-  azToCidr: { [az: string]: string }
+  region: string,
+  cidrToAZ: { [cidr: string]: string }
 ): Promise<string[]> {
-  const ec2Client = new EC2Client({ region: "us-east-1" });
+  const ec2Client = new EC2Client({ region: region});
   const subnetIds: string[] = [];
   console.log("Creating subnets...");
-  for (const [az, cidr] of Object.entries(azToCidr)) {
+  
+  for (const [cidr, az] of Object.entries(cidrToAZ)) {
     const subnetCommand = new CreateSubnetCommand({
       VpcId: vpcId,
       AvailabilityZone: az,
       CidrBlock: cidr,
     });
-
     const result = await ec2Client.send(subnetCommand);
     const subnetId = result.Subnet?.SubnetId;
     if (subnetId) {
       subnetIds.push(subnetId);
-      console.log(`Created subnet ${subnetId} in ${az}`);
+      console.log(`Created subnet ${subnetId} with CIDR ${cidr} in ${az}`);
     } else {
-      console.warn(`Failed to create subnet in ${az}`);
+      console.warn(`Failed to create subnet with CIDR ${cidr} in ${az}`);
     }
   }
   console.log("Subnets created!");
@@ -556,14 +585,16 @@ export async function createSubnets(
  *
  * @param {string} vpcId - The ID of the VPC where the security group will be created
  * @param {string} vpcCidr - The CIDR block of the VPC for configuring security group rules
+ * @param {string} region - Region to initialize ec2Client
  * @returns {Promise<string>} The ID of the created security group
  */
 export async function createYugaByteSecurityGroup(
   vpcId: string,
-  vpcCidr: string
+  vpcCidr: string,
+  region: string
 ): Promise<string> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({});
+  const ec2Client = new EC2Client({region: region});
 
   // Create the security group
   const createSgParams = {
@@ -676,16 +707,18 @@ export async function createYugaByteSecurityGroup(
 /**
  * Creates an Internet Gateway, attaches it to a VPC, and creates a public route table
  * @param vpcId - The ID of the VPC to attach the Internet Gateway to
+ * @param {string} region - Region to initialize ec2Client
  * @returns Promise resolving to the created resources' IDs
  */
 export async function createInternetGatewayAndRouteTable(
-  vpcId: string
+  vpcId: string,
+  region: string
 ): Promise<{
   internetGatewayId: string;
   routeTableId: string;
 }> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({});
+  const ec2Client = new EC2Client({region: region});
 
   try {
     // Step 1: Create Internet Gateway
@@ -748,14 +781,16 @@ export async function createInternetGatewayAndRouteTable(
  * Associates a subnet with a route table
  * @param subnetId - The ID of the subnet to associate
  * @param routeTableId - The ID of the route table to associate with the subnet
+ * @param {string} region - Region to initialize ec2Client
  * @returns Promise resolving to the association response
  */
 export async function createSubnetRouteTableAssociations(
   subnetIds: string[],
-  routeTableId: string
+  routeTableId: string,
+  region: string
 ): Promise<AssociateRouteTableCommandOutput[]> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({});
+  const ec2Client = new EC2Client({region: region});
   const associationResponses: AssociateRouteTableCommandOutput[] = [];
 
   try {
@@ -795,13 +830,15 @@ export async function createSubnetRouteTableAssociations(
  *
  * @param subnetId - The subnet ID where the network interface will be created
  * @param securityGroupId - The security group to attach to the network interface
+ * @param {string} region - Region to initialize ec2Client
  * @returns A promise resolving to an object containing the network interface ID and public IP address
  */
 export async function createNetworkInterfaceWithPublicIP(
   subnetId: string,
-  securityGroupId: string
+  securityGroupId: string,
+  region: string
 ): Promise<{ networkInterfaceId: string; publicIp: string }> {
-  const ec2Client = new EC2Client({});
+  const ec2Client = new EC2Client({region: region});
 
   try {
     // Step 1: Create the network interface
@@ -930,3 +967,81 @@ async function getAmiIdFromSSM(parameterName: string): Promise<string> {
   const response = await client.send(command);
   return response.Parameter?.Value || "";
 }
+/**
+ * Gets available Availability Zones for a specific region.
+ *
+ * @param {string} region - AWS region to query
+ * @returns {Promise<string[]>} Array of available AZ names
+ */
+export async function getAvailableAZs(region: string): Promise<string[]> {
+  // Create EC2 client for the specified region
+  const ec2Client = new EC2Client({ region });
+  
+  // Create command to describe AZs
+  const command = new DescribeAvailabilityZonesCommand({
+    Filters: [
+      {
+        Name: "region-name",
+        Values: [region],
+      },
+      {
+        Name: "state",
+        Values: ["available"],
+      },
+    ],
+  });
+  
+  try {
+    // Execute the command
+    const response = await ec2Client.send(command);
+    
+    // Extract AZ names from the response
+    const azNames = response.AvailabilityZones?.map(az => az.ZoneName || "") || [];
+    
+    // Filter out any empty strings
+    return azNames.filter(name => name !== "");
+  } catch (error) {
+    console.error(`Error fetching availability zones for region ${region}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Builds a network configuration mapping CIDR blocks to Availability Zones.
+ * 
+ * Creates a mapping where each CIDR block is associated with an Availability Zone,
+ * distributing the specified number of subnets across available AZs in a round-robin fashion.
+ * Each subnet uses a /24 CIDR block in the 10.0.x.0/24 range, incrementing for each node.
+ *
+ * @param {string} region - AWS region where the network will be deployed
+ * @param {number} numberOfNodes - Number of subnets/nodes to create
+ * @returns {Promise<{[cidr: string]: string}>} Object mapping CIDR blocks to Availability Zones
+ * @throws {Error} If no Availability Zones are available for the specified region
+ */
+export async function buildNetworkConfig(region: string, numberOfNodes: number): Promise<{ [cidr: string]: string }> {
+  // Get actual AZs available in the region
+  const availableAZs = await getAvailableAZs(region);
+  
+  if (availableAZs.length === 0) {
+    throw new Error(`No availability zones found for region: ${region}`);
+  }
+  
+  // Create CIDR to AZ mapping
+  const cidrToAZ: { [cidr: string]: string } = {};
+  
+  for (let i = 0; i < numberOfNodes; i++) {
+    // Create CIDR with third octet incrementing for each subnet
+    const cidr = `10.0.${i}.0/24`;
+    
+    // Assign AZ in round-robin fashion
+    const azIndex = i % availableAZs.length;
+    const az = availableAZs[azIndex];
+    
+    cidrToAZ[cidr] = az;
+  }
+  
+  return cidrToAZ;
+}
+
+// Usage:
+// const cidrToAZ = await buildNetworkConfig(params.Region, params.NumberOfNodes);
