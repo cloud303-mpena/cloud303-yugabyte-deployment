@@ -51,8 +51,8 @@ async function deployMultiAZ(): Promise<string> {
     netIntIds.push(currNetIntIdAndIp.networkInterfaceId); // This is correct!
     elasticIps.push(currNetIntIdAndIp.publicIp);
   }
-  //TODO: make sure it doesnt exist 
-  const rolename = await resGen.createSSMInstanceRole("SSMPermissionRole")
+  //TODO: make sure it doesnt exist
+  const instanceProfileArn = await resGen.createSSMInstanceRole("SSMPermissionRole")
 
   const azs = Object.keys(azToCidr);
 
@@ -67,7 +67,7 @@ async function deployMultiAZ(): Promise<string> {
   for (let i = 0; i < params.RFFactor; i++) {
     ec2InstanceInfo.push(
       resGen.createEC2Instance(
-          `yugabyte-${i}`,
+        `yugabyte-${i}`,
         "us-east-1",
         params.InstanceType,
         params.LatestAmiId,
@@ -75,6 +75,7 @@ async function deployMultiAZ(): Promise<string> {
         securityGroupId,
         netIntIds[i],
         vpcId!,
+        instanceProfileArn,
         true,
         netIntIds,
         azs[i]
@@ -90,6 +91,9 @@ async function deployMultiAZ(): Promise<string> {
   );
 
   const instances = await Promise.all(ec2InstanceInfo);
+  instances.forEach(({ instanceId}) => {
+    resGen.associateInstanceProfileWithEc2(instanceId, instanceProfileArn)
+  });
 
   instances.forEach(({ privateIpAddress, isMasterNode }) => {
     if (isMasterNode) {
@@ -98,20 +102,19 @@ async function deployMultiAZ(): Promise<string> {
     }
   });
 
+  const response = await resGen.configureYugabyteNodes(
+    (
+      await ec2InstanceInfo[0]
+    ).instanceId,
+    params.SshUser,
+    "us-east-1",
+    Object.keys(azToCidr),
+    masterPrivateIpAddresses,
+    params.RFFactor
+  );
 
-      // const response = await resGen.configureYugabyteNodes(
-      //   (
-      //     await ec2InstanceInfo[0]
-      //   ).instanceId,
-      //   params.SshUser,
-      //   "us-east-1",
-      //   Object.keys(azToCidr),
-      //   masterPrivateIpAddresses,
-      //   params.RFFactor
-      // );
-
-      console.log("Not running, trying again");
-      await new Promise((resolve) => setTimeout(resolve, 10000));
+  console.log("Not running, trying again");
+  await new Promise((resolve) => setTimeout(resolve, 10000));
 
   const firstInstance = await ec2InstanceInfo[0];
   console.log(`View YB UI at: http://${firstInstance.publicIp}:7000`);

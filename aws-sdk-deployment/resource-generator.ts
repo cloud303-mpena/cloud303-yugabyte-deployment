@@ -21,6 +21,7 @@ import {
   AllocateAddressCommand,
   AssociateAddressCommand,
   IamInstanceProfileSpecification,
+  AssociateIamInstanceProfileCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -36,12 +37,11 @@ import {
   AttachRolePolicyCommand,
   CreateInstanceProfileCommand,
   AddRoleToInstanceProfileCommand,
+  GetInstanceProfileCommand,
 } from "@aws-sdk/client-iam";
 
-
-export async function createSSMInstanceRole(roleName: string) {
+export async function createSSMInstanceRole(roleName: string): Promise<string> {
   const iamClient = new IAMClient({ region: "us-east-1" });
-
   // Trust policy for EC2
   const assumeRolePolicyDocument = JSON.stringify({
     Version: "2012-10-17",
@@ -87,9 +87,20 @@ export async function createSSMInstanceRole(roleName: string) {
     })
   );
 
-  console.log(`Created EC2 IAM role and instance profile: ${roleName}`);
+  // 5. Get the instance profile to retrieve its ARN
+  const getInstanceProfileResponse = await iamClient.send(
+    new GetInstanceProfileCommand({
+      InstanceProfileName: roleName,
+    })
+  );
 
-  return roleName;
+  const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
+
+  console.log(
+    `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
+  );
+
+  return instanceProfileArn || "";
 }
 
 const DEFAULTS: YugabyteParams = {
@@ -101,7 +112,7 @@ const DEFAULTS: YugabyteParams = {
     "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
   SshUser: "ubuntu",
   DeploymentType: "Multi-AZ",
-  Region: "us-east-1"
+  Region: "us-east-1",
 };
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
@@ -152,13 +163,13 @@ export async function promptForParams(): Promise<YugabyteParams> {
       message: "Select Deployment Type",
       choices: DEPLOYMENT_TYPES,
       default: DEFAULTS.DeploymentType,
-     },
+    },
     {
       type: "input",
       name: "Region",
       message: "Region",
       default: DEFAULTS.Region,
-     },
+    },
   ]);
 
   return answers as YugabyteParams;
@@ -166,7 +177,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
 /**
  * Creates an EC2 instance in the network interface it is passed.
  * Sets up user data to install necessary libraries, start necessary tools, and initialize tserver and master server
- * 
+ *
  */
 export async function createEC2Instance(
   name: string,
@@ -177,13 +188,15 @@ export async function createEC2Instance(
   securityGroup: string,
   netIntId: string,
   vpcId: string,
+  instanceProfileArn: string,
   isMasterNode: boolean = false,
   masterNetIntIds: string[] = [],
   zone?: string,
   sshUser: string = "ubuntu"
 ) {
   const ec2Client = new EC2Client({ region });
-  try {    const blockDeviceMappings: BlockDeviceMapping[] = [
+  try {
+    const blockDeviceMappings: BlockDeviceMapping[] = [
       {
         DeviceName: "/dev/xvda",
         Ebs: {
@@ -200,16 +213,9 @@ export async function createEC2Instance(
       masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(id))
     );
 
-    //LOOK HERE!!
-    const iamInstanceProfileSpec: IamInstanceProfileSpecification = {
-      Name: name
-    };
-
     const instanceParams = {
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
-      IamInstanceProfile: iamInstanceProfileSpec,
-
       MinCount: 1,
       MaxCount: 1,
       KeyName: keyName,
@@ -243,7 +249,9 @@ export async function createEC2Instance(
 
     console.log(`Successfully created EC2 instance with ID: ${instanceId}`);
     console.log(`Instance is ${isMasterNode ? "a MASTER" : "a TSERVER"} node`);
-
+    console.log('Waiting for running state...')
+    await waitUntilInstanceRunning({ client: ec2Client, maxWaitTime: 1000 }, { InstanceIds: [instanceId!] })
+    console.log(`Instance ${name} is running!`);
     if (!instanceId) {
       throw new Error("Instance ID is undefined.");
     }
@@ -257,6 +265,21 @@ export async function createEC2Instance(
     console.error("Error creating EC2 instance:", err);
     throw err;
   }
+}
+export async function associateInstanceProfileWithEc2(
+  instanceId: string,
+  instanceProfileArn: string
+) {
+  console.log(`Associating instance ${instanceId} with instance profile ${instanceProfileArn}`)
+  const ec2Client = new EC2Client({ region: "us-east-1" });
+  await ec2Client.send(
+    new AssociateIamInstanceProfileCommand({
+      IamInstanceProfile: {
+        Arn: instanceProfileArn,
+      },
+      InstanceId: instanceId,
+    })
+  );
 }
 export async function getPrimaryPrivateIpAddress(
   networkInterfaceId: string
@@ -338,7 +361,8 @@ bash install_software.sh
 cd /home/${sshUser}/yugabyte-2024.2.2.2
 ${
   isMasterNode
-    ? `sudo -u ${sshUser} /home/${sshUser}/start_master.sh ${nodePrivateIp} ${zone} ${region} /home/${sshUser} '${masterAddresses}'`
+    ? `sudo -u ${sshUser} /home/${sshUser}/start_master.sh ${nodePrivateIp} ${zone} ${region} /home/${sshUser} '${masterAddresses}'
+sudo -u ${sshUser} /home/${sshUser}/start_tserver.sh ${nodePrivateIp} ${zone} ${region} /home/${sshUser} '${masterAddresses}'`
     : `sudo -u ${sshUser} /home/${sshUser}/start_tserver.sh ${nodePrivateIp} ${zone} ${region} /home/${sshUser} '${masterAddresses}'`
 }
 `;
@@ -774,8 +798,6 @@ export async function configureYugabyteNodes(
     cd /home/${sshUser}/yugabyte-2024.2.2.2
     sudo -u ${sshUser} /home/${sshUser}/set_replica_policy.sh ${region} ${zones} ${replicationFactor} '${masterAddressesString}'
   `;
-
-  console.log(command)
 
   // Execute the command on the target instance using SSM Run Command
   const response = await ssmClient.send(
