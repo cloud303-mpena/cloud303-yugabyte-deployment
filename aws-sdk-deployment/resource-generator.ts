@@ -210,7 +210,6 @@ export async function createEC2Instance(
       InstanceType: instanceType as _InstanceType,
       IamInstanceProfile: iamInstanceProfileSpec,
 
-
       MinCount: 1,
       MaxCount: 1,
       KeyName: keyName,
@@ -775,6 +774,8 @@ export async function configureYugabyteNodes(
     cd /home/${sshUser}/yugabyte-2024.2.2.2
     sudo -u ${sshUser} /home/${sshUser}/set_replica_policy.sh ${region} ${zones} ${replicationFactor} '${masterAddressesString}'
   `;
+
+  console.log(command)
 
   // Execute the command on the target instance using SSM Run Command
   const response = await ssmClient.send(
