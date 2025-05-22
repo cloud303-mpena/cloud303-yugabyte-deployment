@@ -36,8 +36,8 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.createSSMInstanceRole = createSSMInstanceRole;
 exports.promptForParams = promptForParams;
+exports.createSSMInstanceRole = createSSMInstanceRole;
 exports.createEC2Instance = createEC2Instance;
 exports.associateInstanceProfileWithEc2 = associateInstanceProfileWithEc2;
 exports.getPrimaryPrivateIpAddress = getPrimaryPrivateIpAddress;
@@ -49,76 +49,16 @@ exports.createInternetGatewayAndRouteTable = createInternetGatewayAndRouteTable;
 exports.createSubnetRouteTableAssociations = createSubnetRouteTableAssociations;
 exports.createNetworkInterfaceWithPublicIP = createNetworkInterfaceWithPublicIP;
 exports.configureYugabyteNodes = configureYugabyteNodes;
+exports.getAvailableAZs = getAvailableAZs;
+exports.buildNetworkConfig = buildNetworkConfig;
 var client_ec2_1 = require("@aws-sdk/client-ec2");
 var client_ssm_1 = require("@aws-sdk/client-ssm");
 var inquirer_1 = require("inquirer");
 var client_iam_1 = require("@aws-sdk/client-iam");
-function createSSMInstanceRole(roleName) {
-    return __awaiter(this, void 0, void 0, function () {
-        var iamClient, assumeRolePolicyDocument, getInstanceProfileResponse, instanceProfileArn;
-        var _a;
-        return __generator(this, function (_b) {
-            switch (_b.label) {
-                case 0:
-                    iamClient = new client_iam_1.IAMClient({ region: "us-east-1" });
-                    assumeRolePolicyDocument = JSON.stringify({
-                        Version: "2012-10-17",
-                        Statement: [
-                            {
-                                Effect: "Allow",
-                                Principal: {
-                                    Service: "ec2.amazonaws.com",
-                                },
-                                Action: "sts:AssumeRole",
-                            },
-                        ],
-                    });
-                    // 1. Create IAM Role
-                    return [4 /*yield*/, iamClient.send(new client_iam_1.CreateRoleCommand({
-                            RoleName: roleName,
-                            AssumeRolePolicyDocument: assumeRolePolicyDocument,
-                        }))];
-                case 1:
-                    // 1. Create IAM Role
-                    _b.sent();
-                    // 2. Attach AmazonSSMManagedInstanceCore Policy
-                    return [4 /*yield*/, iamClient.send(new client_iam_1.AttachRolePolicyCommand({
-                            RoleName: roleName,
-                            PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-                        }))];
-                case 2:
-                    // 2. Attach AmazonSSMManagedInstanceCore Policy
-                    _b.sent();
-                    // 3. Create Instance Profile (required for EC2 attachment)
-                    return [4 /*yield*/, iamClient.send(new client_iam_1.CreateInstanceProfileCommand({
-                            InstanceProfileName: roleName,
-                        }))];
-                case 3:
-                    // 3. Create Instance Profile (required for EC2 attachment)
-                    _b.sent();
-                    // 4. Add Role to Instance Profile
-                    return [4 /*yield*/, iamClient.send(new client_iam_1.AddRoleToInstanceProfileCommand({
-                            InstanceProfileName: roleName,
-                            RoleName: roleName,
-                        }))];
-                case 4:
-                    // 4. Add Role to Instance Profile
-                    _b.sent();
-                    return [4 /*yield*/, iamClient.send(new client_iam_1.GetInstanceProfileCommand({
-                            InstanceProfileName: roleName,
-                        }))];
-                case 5:
-                    getInstanceProfileResponse = _b.sent();
-                    instanceProfileArn = (_a = getInstanceProfileResponse.InstanceProfile) === null || _a === void 0 ? void 0 : _a.Arn;
-                    console.log("Created EC2 IAM role and instance profile: ".concat(roleName, " with ARN: ").concat(instanceProfileArn));
-                    return [2 /*return*/, instanceProfileArn || ""];
-            }
-        });
-    });
-}
 var DEFAULTS = {
     DBVersion: "2024.2.2.1-b190",
     RFFactor: 3,
+    NumberOfNodes: 3,
     KeyName: "",
     InstanceType: "t3.medium",
     LatestAmiId: "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
@@ -128,6 +68,11 @@ var DEFAULTS = {
 };
 var INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
 var DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
+/**
+ * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
+ *
+ * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
+ */
 function promptForParams() {
     return __awaiter(this, void 0, void 0, function () {
         var answers;
@@ -142,9 +87,17 @@ function promptForParams() {
                         },
                         {
                             type: "input",
+                            name: "NumberOfNodes",
+                            message: "Number of Nodes",
+                            default: String(DEFAULTS.NumberOfNodes),
+                        },
+                        {
+                            type: "input",
                             name: "RFFactor",
                             message: "RFFactor",
                             default: String(DEFAULTS.RFFactor),
+                            //RF must be odd
+                            validate: function (input) { return (parseInt(input, 10) % 2 == 1); }
                         },
                         {
                             type: "input",
@@ -194,18 +147,125 @@ function promptForParams() {
     });
 }
 /**
- * Creates an EC2 instance in the network interface it is passed.
- * Sets up user data to install necessary libraries, start necessary tools, and initialize tserver and master server
+ * Initializes EC2 client in the right region
+* @param {region} - region to initialize the client in
+*
+*/
+// export async function initEC2Client(region: string) {
+//   ec2Client = new EC2Client({region: region})
+// }
+/**
+ * Creates an IAM role and instance profile with SSM permissions for EC2 instances.
  *
+ * This function performs the following operations:
+ * 1. Creates an IAM role with EC2 trust relationship
+ * 2. Attaches the AmazonSSMManagedInstanceCore policy to the role
+ * 3. Creates an instance profile with the same name as the role
+ * 4. Adds the role to the instance profile
+ * 5. Retrieves and returns the ARN of the created instance profile
+ *
+ * @param {string} roleName - The name to use for both the IAM role and instance profile
+ * @returns {Promise<string>} A promise that resolves to the ARN of the created instance profile
+ * @throws {Error} If any of the IAM operations fail during role or profile creation
  */
-function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_1, securityGroup_1, netIntId_1, vpcId_1, instanceProfileArn_1) {
-    return __awaiter(this, arguments, void 0, function (name, region, instanceType, imageId, keyName, securityGroup, netIntId, vpcId, instanceProfileArn, isMasterNode, masterNetIntIds, zone, sshUser) {
+function createSSMInstanceRole(roleName) {
+    return __awaiter(this, void 0, void 0, function () {
+        var iamClient, assumeRolePolicyDocument, error_1, getInstanceProfileResponse, instanceProfileArn;
+        var _a;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0:
+                    iamClient = new client_iam_1.IAMClient();
+                    assumeRolePolicyDocument = JSON.stringify({
+                        Version: "2012-10-17",
+                        Statement: [
+                            {
+                                Effect: "Allow",
+                                Principal: {
+                                    Service: "ec2.amazonaws.com",
+                                },
+                                Action: "sts:AssumeRole",
+                            },
+                        ],
+                    });
+                    _b.label = 1;
+                case 1:
+                    _b.trys.push([1, 6, , 7]);
+                    // Create IAM Role
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.CreateRoleCommand({
+                            RoleName: roleName,
+                            AssumeRolePolicyDocument: assumeRolePolicyDocument,
+                        }))];
+                case 2:
+                    // Create IAM Role
+                    _b.sent();
+                    // Attach AmazonSSMManagedInstanceCore Policy
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.AttachRolePolicyCommand({
+                            RoleName: roleName,
+                            PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+                        }))];
+                case 3:
+                    // Attach AmazonSSMManagedInstanceCore Policy
+                    _b.sent();
+                    // Create Instance Profile (required for EC2 attachment)
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.CreateInstanceProfileCommand({
+                            InstanceProfileName: roleName,
+                        }))];
+                case 4:
+                    // Create Instance Profile (required for EC2 attachment)
+                    _b.sent();
+                    // Add Role to Instance Profile
+                    return [4 /*yield*/, iamClient.send(new client_iam_1.AddRoleToInstanceProfileCommand({
+                            InstanceProfileName: roleName,
+                            RoleName: roleName,
+                        }))];
+                case 5:
+                    // Add Role to Instance Profile
+                    _b.sent();
+                    return [3 /*break*/, 7];
+                case 6:
+                    error_1 = _b.sent();
+                    //TODO: change to make sure the error is that it already exists
+                    if (error_1.name === "EntityAlreadyExistsException") {
+                    }
+                    return [3 /*break*/, 7];
+                case 7: return [4 /*yield*/, iamClient.send(new client_iam_1.GetInstanceProfileCommand({
+                        InstanceProfileName: roleName,
+                    }))];
+                case 8:
+                    getInstanceProfileResponse = _b.sent();
+                    instanceProfileArn = (_a = getInstanceProfileResponse.InstanceProfile) === null || _a === void 0 ? void 0 : _a.Arn;
+                    console.log("Created EC2 IAM role and instance profile: ".concat(roleName, " with ARN: ").concat(instanceProfileArn));
+                    return [2 /*return*/, instanceProfileArn || ""];
+            }
+        });
+    });
+}
+/**
+ * Creates an EC2 instance with specified configurations and waits until it is running.
+ *
+ * @param {string} name - The name to assign to the EC2 instance.
+ * @param {string} region - The AWS region where the instance will be created.
+ * @param {string} instanceType - The type of instance to create (e.g., t2.micro).
+ * @param {string} imageId - The ID of the AMI to use for the instance.
+ * @param {string} keyName - The name of the key pair to use for SSH access.
+ * @param {string} netIntId - The network interface ID to associate with the instance.
+ * @param {boolean} [isMasterNode=false] - Flag indicating if the instance is a master node.
+ * @param {string[]} masterNetIntIds - List of network interface IDs for master nodes.
+ * @param {string} zone - The availability zone for the instance.
+ * @param {string} sshUser - The SSH username for accessing the instance.
+ *
+ * @returns {Promise<{instanceId: string, privateIpAddress: string, isMasterNode: boolean}>}
+ * An object containing the instance ID, private IP address, and master node status.
+ *
+ * @throws Will throw an error if the instance creation fails.
+ */
+function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_1, netIntId_1) {
+    return __awaiter(this, arguments, void 0, function (name, region, instanceType, imageId, keyName, netIntId, isMasterNode, masterNetIntIds, zone, sshUser) {
         var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
         var _a;
         var _b;
         if (isMasterNode === void 0) { isMasterNode = false; }
-        if (masterNetIntIds === void 0) { masterNetIntIds = []; }
-        if (sshUser === void 0) { sshUser = "ubuntu"; }
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0:
@@ -223,13 +283,15 @@ function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_
                             },
                         },
                     ];
-                    return [4 /*yield*/, getPrimaryPrivateIpAddress(netIntId)];
+                    return [4 /*yield*/, getPrimaryPrivateIpAddress(region, netIntId)];
                 case 2:
                     nodePrivateIp = _c.sent();
-                    return [4 /*yield*/, Promise.all(masterNetIntIds.map(function (id) { return getPrimaryPrivateIpAddress(id); }))];
+                    return [4 /*yield*/, Promise.all(masterNetIntIds.map(function (id) { return getPrimaryPrivateIpAddress(region, id, false); }))];
                 case 3:
                     masterPrivateIps = _c.sent();
-                    _a = {};
+                    _a = {
+                        Name: name
+                    };
                     return [4 /*yield*/, getAmiIdFromSSM(imageId)];
                 case 4:
                     instanceParams = (_a.ImageId = _c.sent(),
@@ -255,7 +317,7 @@ function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_
                     privateIpAddress = instance === null || instance === void 0 ? void 0 : instance.PrivateIpAddress;
                     console.log("Successfully created EC2 instance with ID: ".concat(instanceId));
                     console.log("Instance is ".concat(isMasterNode ? "a MASTER" : "a TSERVER", " node"));
-                    console.log('Waiting for running state...');
+                    console.log("Waiting for running state...");
                     return [4 /*yield*/, (0, client_ec2_1.waitUntilInstanceRunning)({ client: ec2Client, maxWaitTime: 1000 }, { InstanceIds: [instanceId] })];
                 case 6:
                     _c.sent();
@@ -277,14 +339,24 @@ function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_
         });
     });
 }
-function associateInstanceProfileWithEc2(instanceId, instanceProfileArn) {
+/**
+ * Associates an IAM instance profile with a specified EC2 instance.
+ *
+ * @param {string} instanceId - The ID of the EC2 instance to associate with the instance profile.
+ * @param {string} instanceProfileArn - The ARN of the IAM instance profile to associate with the EC2 instance.
+ * @param {string} region - region of where the ec2 instance lives
+ * @returns {Promise<void>} A promise that resolves when the association is complete.
+ *
+ * This function logs the association process and uses the AWS SDK to send the
+ */
+function associateInstanceProfileWithEc2(instanceId, instanceProfileArn, region) {
     return __awaiter(this, void 0, void 0, function () {
         var ec2Client;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     console.log("Associating instance ".concat(instanceId, " with instance profile ").concat(instanceProfileArn));
-                    ec2Client = new client_ec2_1.EC2Client({ region: "us-east-1" });
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     return [4 /*yield*/, ec2Client.send(new client_ec2_1.AssociateIamInstanceProfileCommand({
                             IamInstanceProfile: {
                                 Arn: instanceProfileArn,
@@ -298,13 +370,26 @@ function associateInstanceProfileWithEc2(instanceId, instanceProfileArn) {
         });
     });
 }
-function getPrimaryPrivateIpAddress(networkInterfaceId) {
-    return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, response, primaryPrivateIpAddress, error_1;
+/**
+ * Retrieves the primary private IP address associated with a specified network interface.
+ *
+ * @param {string} networkInterfaceId - The ID of the network interface to query.
+ * @param {boolean} doPrint - Whether or not to print the ip
+ * @param {string} region - Region to initialize ec2Client
+ * @returns {Promise<string>} A promise that resolves to the primary private IP address of the network interface.
+ *
+ * @throws Will throw an error if the network interface is not found or if no primary private IP address is available.
+ *
+ * This function utilizes the EC2 client to send a DescribeNetworkInterfacesCommand and logs the process.
+ */
+function getPrimaryPrivateIpAddress(region_1, networkInterfaceId_1) {
+    return __awaiter(this, arguments, void 0, function (region, networkInterfaceId, doPrint) {
+        var ec2Client, response, primaryPrivateIpAddress, error_2;
+        if (doPrint === void 0) { doPrint = true; }
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({});
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     _a.label = 1;
                 case 1:
                     _a.trys.push([1, 3, , 4]);
@@ -322,23 +407,39 @@ function getPrimaryPrivateIpAddress(networkInterfaceId) {
                     if (!primaryPrivateIpAddress) {
                         throw new Error("No primary private IP address found for network interface ".concat(networkInterfaceId));
                     }
-                    console.log("Primary private IP address for ".concat(networkInterfaceId, ": ").concat(primaryPrivateIpAddress));
+                    if (doPrint) {
+                        console.log("Primary private IP address for ".concat(networkInterfaceId, ": ").concat(primaryPrivateIpAddress));
+                    }
                     return [2 /*return*/, primaryPrivateIpAddress];
                 case 3:
-                    error_1 = _a.sent();
-                    console.error("Error getting primary private IP address for network interface ".concat(networkInterfaceId, ":"), error_1);
-                    throw error_1;
+                    error_2 = _a.sent();
+                    console.error("Error getting primary private IP address for network interface ".concat(networkInterfaceId, ":"), error_2);
+                    throw error_2;
                 case 4: return [2 /*return*/];
             }
         });
     });
 }
-// Helper function to generate the user data script for the EC2 instance
+/**
+ * Generates user data script for EC2 instances in a cluster configuration.
+ *
+ * Creates a customized initialization script based on whether the node is a master node
+ * or a worker node, incorporating network configuration, and SSH access.
+ *
+ * @param {boolean} isMasterNode - Whether this node is a master node in the cluster
+ * @param {string[]} masterPrivateIps - Array of private IP addresses of all master nodes
+ * @param {string} zone - The availability zone where the instance is deployed
+ * @param {string} region - The AWS region where the instance is deployed
+ * @param {string} sshUser - The username for SSH access to be configured on the instance
+ * @param {string} nodePrivateIp - The private IP address of the node being configured
+ * @returns {string} Base64 encoded user-data script for initialization
+ *
+ */
 function generateUserData(isMasterNode, masterPrivateIps, zone, region, sshUser, nodePrivateIp) {
     // Format master addresses for YugaByteDB configuration
     var masterAddresses = masterPrivateIps.map(function (ip) { return "".concat(ip, ":7100"); }).join(",");
     return "#!/bin/bash -xe\napt-get update -y\napt-get install -y python3-pip\n\n# Install required software\ncd /home/".concat(sshUser, "\nwget https://software.yugabyte.com/releases/2024.2.2.2/yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz\ntar xvfz yugabyte-2024.2.2.2-b2-linux-x86_64.tar.gz\ncd yugabyte-2024.2.2.2/\n./bin/post_install.sh\n\n# Download configuration scripts\ncd /home/").concat(sshUser, "\ncurl -o install_software.sh https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/install_software.sh\ncurl -o start_master.sh https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_master.sh\ncurl -o start_tserver.sh https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/start_tserver.sh\ncurl -o set_replica_policy.sh https://raw.githubusercontent.com/cloud303-mpena/cloud303-yugabyte-deployment/refs/heads/master/scripts/set_replica_policy.sh\nchmod +x *.sh\nbash install_software.sh\n\n# Run the appropriate node setup script based on node type\ncd /home/").concat(sshUser, "/yugabyte-2024.2.2.2\n").concat(isMasterNode
-        ? "sudo -u ".concat(sshUser, " /home/").concat(sshUser, "/start_master.sh ").concat(nodePrivateIp, " ").concat(zone, " ").concat(region, " /home/").concat(sshUser, " '").concat(masterAddresses, "'")
+        ? "sudo -u ".concat(sshUser, " /home/").concat(sshUser, "/start_master.sh ").concat(nodePrivateIp, " ").concat(zone, " ").concat(region, " /home/").concat(sshUser, " '").concat(masterAddresses, "'\nsudo -u ").concat(sshUser, " /home/").concat(sshUser, "/start_tserver.sh ").concat(nodePrivateIp, " ").concat(zone, " ").concat(region, " /home/").concat(sshUser, " '").concat(masterAddresses, "'")
         : "sudo -u ".concat(sshUser, " /home/").concat(sshUser, "/start_tserver.sh ").concat(nodePrivateIp, " ").concat(zone, " ").concat(region, " /home/").concat(sshUser, " '").concat(masterAddresses, "'"), "\n");
 }
 /**
@@ -397,14 +498,20 @@ function waitForInstanceRunning(region, instanceId) {
         });
     });
 }
-function createVpc(cidrBlock, name) {
+/**
+ * Creates an AWS VPC with the specified CIDR block and name tag.
+ * @param {string} region - region to deploy the VPC in
+ * @param {string} cidrBlock - The IPv4 CIDR block for the VPC
+ * @returns {Promise<string | undefined>} The ID of the created VPC or undefined if creation fails
+ */
+function createVpc(region, cidrBlock) {
     return __awaiter(this, void 0, void 0, function () {
         var ec2Client, createVpcCommand, vpcResult, vpcId, err_3;
         var _a;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({ region: "us-east-1" });
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     _b.label = 1;
                 case 1:
                     _b.trys.push([1, 3, , 4]);
@@ -428,22 +535,29 @@ function createVpc(cidrBlock, name) {
         });
     });
 }
-function createSubnets(vpcId, azToCidr // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
-) {
+/**
+ * Creates subnets in the specified VPC using a mapping of CIDR blocks to availability zones.
+ *
+ * @param {string} vpcId - The ID of the VPC where subnets will be created
+ * @param {string} region - Region to initialize ec2Client
+ * @param {Object} cidrToAZ - Mapping of CIDR blocks to availability zones
+ * @returns {Promise<string[]>} Array of created subnet IDs
+ */
+function createSubnets(vpcId, region, cidrToAZ) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, subnetIds, _i, _a, _b, az, cidr, subnetCommand, result, subnetId;
+        var ec2Client, subnetIds, _i, _a, _b, cidr, az, subnetCommand, result, subnetId;
         var _c;
         return __generator(this, function (_d) {
             switch (_d.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({ region: "us-east-1" });
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     subnetIds = [];
                     console.log("Creating subnets...");
-                    _i = 0, _a = Object.entries(azToCidr);
+                    _i = 0, _a = Object.entries(cidrToAZ);
                     _d.label = 1;
                 case 1:
                     if (!(_i < _a.length)) return [3 /*break*/, 4];
-                    _b = _a[_i], az = _b[0], cidr = _b[1];
+                    _b = _a[_i], cidr = _b[0], az = _b[1];
                     subnetCommand = new client_ec2_1.CreateSubnetCommand({
                         VpcId: vpcId,
                         AvailabilityZone: az,
@@ -455,10 +569,10 @@ function createSubnets(vpcId, azToCidr // e.g., { "us-east-1a": "10.0.0.0/24", "
                     subnetId = (_c = result.Subnet) === null || _c === void 0 ? void 0 : _c.SubnetId;
                     if (subnetId) {
                         subnetIds.push(subnetId);
-                        console.log("Created subnet ".concat(subnetId, " in ").concat(az));
+                        console.log("Created subnet ".concat(subnetId, " with CIDR ").concat(cidr, " in ").concat(az));
                     }
                     else {
-                        console.warn("Failed to create subnet in ".concat(az));
+                        console.warn("Failed to create subnet with CIDR ".concat(cidr, " in ").concat(az));
                     }
                     _d.label = 3;
                 case 3:
@@ -471,13 +585,21 @@ function createSubnets(vpcId, azToCidr // e.g., { "us-east-1a": "10.0.0.0/24", "
         });
     });
 }
-function createYugaByteSecurityGroup(vpcId, vpcCidr) {
+/**
+ * Creates a security group for YugabyteDB with the necessary inbound and outbound rules.
+ *
+ * @param {string} vpcId - The ID of the VPC where the security group will be created
+ * @param {string} vpcCidr - The CIDR block of the VPC for configuring security group rules
+ * @param {string} region - Region to initialize ec2Client
+ * @returns {Promise<string>} The ID of the created security group
+ */
+function createYugaByteSecurityGroup(vpcId, vpcCidr, region) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, createSgParams, createSgResponse, securityGroupId, ingressRules, error_2;
+        var ec2Client, createSgParams, createSgResponse, securityGroupId, ingressRules, error_3;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({});
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     createSgParams = {
                         Description: "YugaByte Node Security Group",
                         GroupName: "YugaByteNodeSG",
@@ -573,9 +695,9 @@ function createYugaByteSecurityGroup(vpcId, vpcCidr) {
                     console.log("Successfully created YugaByte security group: ".concat(securityGroupId));
                     return [2 /*return*/, securityGroupId];
                 case 4:
-                    error_2 = _a.sent();
-                    console.error("Error creating YugaByte security group:", error_2);
-                    throw error_2;
+                    error_3 = _a.sent();
+                    console.error("Error creating YugaByte security group:", error_3);
+                    throw error_3;
                 case 5: return [2 /*return*/];
             }
         });
@@ -584,16 +706,17 @@ function createYugaByteSecurityGroup(vpcId, vpcCidr) {
 /**
  * Creates an Internet Gateway, attaches it to a VPC, and creates a public route table
  * @param vpcId - The ID of the VPC to attach the Internet Gateway to
+ * @param {string} region - Region to initialize ec2Client
  * @returns Promise resolving to the created resources' IDs
  */
-function createInternetGatewayAndRouteTable(vpcId) {
+function createInternetGatewayAndRouteTable(vpcId, region) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, createIgwResponse, internetGatewayId, createRouteTableResponse, routeTableId, error_3;
+        var ec2Client, createIgwResponse, internetGatewayId, createRouteTableResponse, routeTableId, error_4;
         var _a, _b;
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({});
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     _c.label = 1;
                 case 1:
                     _c.trys.push([1, 6, , 7]);
@@ -636,9 +759,9 @@ function createInternetGatewayAndRouteTable(vpcId) {
                             routeTableId: routeTableId,
                         }];
                 case 6:
-                    error_3 = _c.sent();
-                    console.error("Error creating Internet Gateway and Route Table:", error_3);
-                    throw error_3;
+                    error_4 = _c.sent();
+                    console.error("Error creating Internet Gateway and Route Table:", error_4);
+                    throw error_4;
                 case 7: return [2 /*return*/];
             }
         });
@@ -648,15 +771,16 @@ function createInternetGatewayAndRouteTable(vpcId) {
  * Associates a subnet with a route table
  * @param subnetId - The ID of the subnet to associate
  * @param routeTableId - The ID of the route table to associate with the subnet
+ * @param {string} region - Region to initialize ec2Client
  * @returns Promise resolving to the association response
  */
-function createSubnetRouteTableAssociations(subnetIds, routeTableId) {
+function createSubnetRouteTableAssociations(subnetIds, routeTableId, region) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, associationResponses, _i, subnetIds_1, subnetId, associationResponse, error_4;
+        var ec2Client, associationResponses, _i, subnetIds_1, subnetId, associationResponse, error_5;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({});
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     associationResponses = [];
                     _a.label = 1;
                 case 1:
@@ -683,9 +807,9 @@ function createSubnetRouteTableAssociations(subnetIds, routeTableId) {
                     console.log("Associated ".concat(subnetIds.length, " subnets with route table ").concat(routeTableId));
                     return [2 /*return*/, associationResponses];
                 case 6:
-                    error_4 = _a.sent();
-                    console.error("Error associating subnets with route table ".concat(routeTableId, ":"), error_4);
-                    throw error_4;
+                    error_5 = _a.sent();
+                    console.error("Error associating subnets with route table ".concat(routeTableId, ":"), error_5);
+                    throw error_5;
                 case 7: return [2 /*return*/];
             }
         });
@@ -697,16 +821,17 @@ function createSubnetRouteTableAssociations(subnetIds, routeTableId) {
  *
  * @param subnetId - The subnet ID where the network interface will be created
  * @param securityGroupId - The security group to attach to the network interface
+ * @param {string} region - Region to initialize ec2Client
  * @returns A promise resolving to an object containing the network interface ID and public IP address
  */
-function createNetworkInterfaceWithPublicIP(subnetId, securityGroupId) {
+function createNetworkInterfaceWithPublicIP(subnetId, securityGroupId, region) {
     return __awaiter(this, void 0, void 0, function () {
-        var ec2Client, createResponse, networkInterfaceId, allocateResponse, allocationId, publicIp, privateIp, error_5;
+        var ec2Client, createResponse, networkInterfaceId, allocateResponse, allocationId, publicIp, privateIp, error_6;
         var _a, _b;
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0:
-                    ec2Client = new client_ec2_1.EC2Client({});
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
                     _c.label = 1;
                 case 1:
                     _c.trys.push([1, 5, , 6]);
@@ -749,14 +874,26 @@ function createNetworkInterfaceWithPublicIP(subnetId, securityGroupId) {
                             publicIp: publicIp,
                         }];
                 case 5:
-                    error_5 = _c.sent();
-                    console.error("Error creating network interface with public IP:", error_5);
-                    throw error_5;
+                    error_6 = _c.sent();
+                    console.error("Error creating network interface with public IP:", error_6);
+                    throw error_6;
                 case 6: return [2 /*return*/];
             }
         });
     });
 }
+/**
+ * Configures YugabyteDB nodes with appropriate replication settings and placement policies.
+ * Uses ssm client to run bash command
+ *
+ * @param {string} instanceId - The EC2 instance ID of the YugabyteDB node
+ * @param {string} sshUser - The SSH username for connecting to the instance
+ * @param {string} region - The AWS region where the node is deployed
+ * @param {string[]} zones - Array of availability zones used in the deployment
+ * @param {string[]} masterAddresses - Array of YugabyteDB master addresses
+ * @param {number} replicationFactor - The replication factor for YugabyteDB (default: 3)
+ * @param {string} scriptUrl - URL to the configuration script (default: GitHub URL)
+ */
 function configureYugabyteNodes(instanceId_1, sshUser_1, region_1, zones_1, masterAddresses_1) {
     return __awaiter(this, arguments, void 0, function (instanceId, sshUser, region, zones, masterAddresses, replicationFactor, scriptUrl) {
         var ssmClient, masterAddressesString, command, response;
@@ -768,7 +905,6 @@ function configureYugabyteNodes(instanceId_1, sshUser_1, region_1, zones_1, mast
                     ssmClient = new client_ssm_1.SSMClient({ region: region });
                     masterAddressesString = masterAddresses.join(",");
                     command = "\n    # Download replica policy script\n    cd /home/".concat(sshUser, "\n    curl -o set_replica_policy.sh ").concat(scriptUrl, "\n    chmod +x set_replica_policy.sh\n    \n    # Run the script\n    cd /home/").concat(sshUser, "/yugabyte-2024.2.2.2\n    sudo -u ").concat(sshUser, " /home/").concat(sshUser, "/set_replica_policy.sh ").concat(region, " ").concat(zones, " ").concat(replicationFactor, " '").concat(masterAddressesString, "'\n  ");
-                    console.log(command);
                     return [4 /*yield*/, ssmClient.send(new client_ssm_1.SendCommandCommand({
                             DocumentName: "AWS-RunShellScript",
                             InstanceIds: [instanceId],
@@ -783,6 +919,12 @@ function configureYugabyteNodes(instanceId_1, sshUser_1, region_1, zones_1, mast
         });
     });
 }
+/**
+ * Retrieves an AMI ID from AWS Systems Manager Parameter Store.
+ *
+ * @param {string} parameterName - The name of the SSM parameter containing the AMI ID
+ * @returns {Promise<string>} The AMI ID stored in the parameter, or empty string if not found
+ */
 function getAmiIdFromSSM(parameterName) {
     return __awaiter(this, void 0, void 0, function () {
         var client, command, response;
@@ -803,3 +945,84 @@ function getAmiIdFromSSM(parameterName) {
         });
     });
 }
+/**
+ * Gets available Availability Zones for a specific region.
+ *
+ * @param {string} region - AWS region to query
+ * @returns {Promise<string[]>} Array of available AZ names
+ */
+function getAvailableAZs(region) {
+    return __awaiter(this, void 0, void 0, function () {
+        var ec2Client, command, response, azNames, error_7;
+        var _a;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0:
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
+                    command = new client_ec2_1.DescribeAvailabilityZonesCommand({
+                        Filters: [
+                            {
+                                Name: "region-name",
+                                Values: [region],
+                            },
+                            {
+                                Name: "state",
+                                Values: ["available"],
+                            },
+                        ],
+                    });
+                    _b.label = 1;
+                case 1:
+                    _b.trys.push([1, 3, , 4]);
+                    return [4 /*yield*/, ec2Client.send(command)];
+                case 2:
+                    response = _b.sent();
+                    azNames = ((_a = response.AvailabilityZones) === null || _a === void 0 ? void 0 : _a.map(function (az) { return az.ZoneName || ""; })) || [];
+                    // Filter out any empty strings
+                    return [2 /*return*/, azNames.filter(function (name) { return name !== ""; })];
+                case 3:
+                    error_7 = _b.sent();
+                    console.error("Error fetching availability zones for region ".concat(region, ":"), error_7);
+                    throw error_7;
+                case 4: return [2 /*return*/];
+            }
+        });
+    });
+}
+/**
+ * Builds a network configuration mapping CIDR blocks to Availability Zones.
+ *
+ * Creates a mapping where each CIDR block is associated with an Availability Zone,
+ * distributing the specified number of subnets across available AZs in a round-robin fashion.
+ * Each subnet uses a /24 CIDR block in the 10.0.x.0/24 range, incrementing for each node.
+ *
+ * @param {string} region - AWS region where the network will be deployed
+ * @param {number} numberOfNodes - Number of subnets/nodes to create
+ * @returns {Promise<{[cidr: string]: string}>} Object mapping CIDR blocks to Availability Zones
+ * @throws {Error} If no Availability Zones are available for the specified region
+ */
+function buildNetworkConfig(region, numberOfNodes) {
+    return __awaiter(this, void 0, void 0, function () {
+        var availableAZs, cidrToAZ, i, cidr, azIndex, az;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0: return [4 /*yield*/, getAvailableAZs(region)];
+                case 1:
+                    availableAZs = _a.sent();
+                    if (availableAZs.length === 0) {
+                        throw new Error("No availability zones found for region: ".concat(region));
+                    }
+                    cidrToAZ = {};
+                    for (i = 0; i < numberOfNodes; i++) {
+                        cidr = "10.0.".concat(i, ".0/24");
+                        azIndex = i % availableAZs.length;
+                        az = availableAZs[azIndex];
+                        cidrToAZ[cidr] = az;
+                    }
+                    return [2 /*return*/, cidrToAZ];
+            }
+        });
+    });
+}
+// Usage:
+// const cidrToAZ = await buildNetworkConfig(params.Region, params.NumberOfNodes);

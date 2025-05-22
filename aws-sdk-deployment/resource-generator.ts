@@ -40,6 +40,7 @@ import {
   AddRoleToInstanceProfileCommand,
   GetInstanceProfileCommand,
 } from "@aws-sdk/client-iam";
+import { get } from "http";
 
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
@@ -195,7 +196,13 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
       })
     );
 
-    // Get the instance profile to retrieve its ARN
+  } catch (error) {
+    //TODO: change to make sure the error is that it already exists
+      if ((error as any).name === "EntityAlreadyExistsException"){
+
+      }
+  }
+      // Get the instance profile to retrieve its ARN
     const getInstanceProfileResponse = await iamClient.send(
       new GetInstanceProfileCommand({
         InstanceProfileName: roleName,
@@ -208,10 +215,6 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
     );
 
     return instanceProfileArn || "";
-  } catch (error) {
-    console.error(`Error making instance profile: ${error}`)
-    return ""
-  }
 }
 
 /**
@@ -1042,6 +1045,3 @@ export async function buildNetworkConfig(region: string, numberOfNodes: number):
   
   return cidrToAZ;
 }
-
-// Usage:
-// const cidrToAZ = await buildNetworkConfig(params.Region, params.NumberOfNodes);

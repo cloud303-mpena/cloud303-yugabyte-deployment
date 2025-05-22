@@ -39,59 +39,55 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var resGen = require("./resource-generator");
 function deployMultiAZ() {
     return __awaiter(this, void 0, void 0, function () {
-        var params, vpcId, azToCidr, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, elasticIps, _i, subnetIds_1, subnetId, currNetIntIdAndIp, instanceProfileArn, azs, ec2InstanceInfo, masterPrivateIpAddresses, i, instances, response, _a, _b, firstInstance;
+        var params, vpcId, cidrToAZ, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, elasticIps, _i, subnetIds_1, subnetId, currNetIntIdAndIp, instanceProfileArn, azs, ec2InstanceInfo, masterPrivateIpAddresses, i, instances, response, _a, _b, err_1, firstInstance;
         var _this = this;
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0: return [4 /*yield*/, resGen.promptForParams()];
                 case 1:
                     params = _c.sent();
-                    return [4 /*yield*/, resGen.createVpc("10.0.0.0/16", "Yugabyte VPC")];
+                    return [4 /*yield*/, resGen.createVpc(params.Region, "10.0.0.0/16")];
                 case 2:
                     vpcId = _c.sent();
-                    azToCidr = {};
-                    //if (params.RFFactor === 3) {
-                    azToCidr = {
-                        "us-east-1a": "10.0.0.0/24",
-                        "us-east-1b": "10.0.1.0/24",
-                        "us-east-1c": "10.0.2.0/24",
-                    };
-                    return [4 /*yield*/, resGen.createSubnets(vpcId, azToCidr)];
+                    return [4 /*yield*/, resGen.buildNetworkConfig(params.Region, params.NumberOfNodes)];
                 case 3:
-                    subnetIds = _c.sent();
-                    return [4 /*yield*/, resGen.createInternetGatewayAndRouteTable(vpcId)];
+                    cidrToAZ = _c.sent();
+                    return [4 /*yield*/, resGen.createSubnets(vpcId, params.Region, cidrToAZ)];
                 case 4:
-                    intIdAndRouteTableId = _c.sent();
-                    return [4 /*yield*/, resGen.createSubnetRouteTableAssociations(subnetIds, intIdAndRouteTableId.routeTableId)];
+                    subnetIds = _c.sent();
+                    return [4 /*yield*/, resGen.createInternetGatewayAndRouteTable(vpcId, params.Region)];
                 case 5:
-                    associationResponse = _c.sent();
-                    return [4 /*yield*/, resGen.createYugaByteSecurityGroup(vpcId, "10.0.0.0/16")];
+                    intIdAndRouteTableId = _c.sent();
+                    return [4 /*yield*/, resGen.createSubnetRouteTableAssociations(subnetIds, intIdAndRouteTableId.routeTableId, params.Region)];
                 case 6:
+                    associationResponse = _c.sent();
+                    return [4 /*yield*/, resGen.createYugaByteSecurityGroup(vpcId, "10.0.0.0/16", params.Region)];
+                case 7:
                     securityGroupId = _c.sent();
                     netIntIds = [];
                     elasticIps = [];
                     _i = 0, subnetIds_1 = subnetIds;
-                    _c.label = 7;
-                case 7:
-                    if (!(_i < subnetIds_1.length)) return [3 /*break*/, 10];
-                    subnetId = subnetIds_1[_i];
-                    return [4 /*yield*/, resGen.createNetworkInterfaceWithPublicIP(subnetId, securityGroupId)];
+                    _c.label = 8;
                 case 8:
-                    currNetIntIdAndIp = _c.sent();
-                    netIntIds.push(currNetIntIdAndIp.networkInterfaceId); // This is correct!
-                    elasticIps.push(currNetIntIdAndIp.publicIp);
-                    _c.label = 9;
+                    if (!(_i < subnetIds_1.length)) return [3 /*break*/, 11];
+                    subnetId = subnetIds_1[_i];
+                    return [4 /*yield*/, resGen.createNetworkInterfaceWithPublicIP(subnetId, securityGroupId, params.Region)];
                 case 9:
+                    currNetIntIdAndIp = _c.sent();
+                    netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
+                    elasticIps.push(currNetIntIdAndIp.publicIp);
+                    _c.label = 10;
+                case 10:
                     _i++;
-                    return [3 /*break*/, 7];
-                case 10: return [4 /*yield*/, resGen.createSSMInstanceRole("SSMPermissionRole")];
-                case 11:
+                    return [3 /*break*/, 8];
+                case 11: return [4 /*yield*/, resGen.createSSMInstanceRole("SSMPermissionRole")];
+                case 12:
                     instanceProfileArn = _c.sent();
-                    azs = Object.keys(azToCidr);
+                    azs = Object.values(cidrToAZ);
                     ec2InstanceInfo = [];
                     masterPrivateIpAddresses = [];
                     for (i = 0; i < params.RFFactor; i++) {
-                        ec2InstanceInfo.push(resGen.createEC2Instance("yugabyte-".concat(i), "us-east-1", params.InstanceType, params.LatestAmiId, params.KeyName, securityGroupId, netIntIds[i], vpcId, instanceProfileArn, true, netIntIds, azs[i]));
+                        ec2InstanceInfo.push(resGen.createEC2Instance("yugabyte-".concat(i), params.Region, params.InstanceType, params.LatestAmiId, params.KeyName, netIntIds[i], i < params.RFFactor ? true : false, netIntIds, azs[i], params.SshUser));
                     }
                     return [4 /*yield*/, Promise.all(ec2InstanceInfo.map(function (instancePromise) { return __awaiter(_this, void 0, void 0, function () {
                             var instance;
@@ -100,18 +96,18 @@ function deployMultiAZ() {
                                     case 0: return [4 /*yield*/, instancePromise];
                                     case 1:
                                         instance = _a.sent();
-                                        return [2 /*return*/, resGen.waitForInstanceRunning("us-east-1", instance.instanceId)];
+                                        return [2 /*return*/, resGen.waitForInstanceRunning(params.Region, instance.instanceId)];
                                 }
                             });
                         }); }))];
-                case 12:
+                case 13:
                     _c.sent();
                     return [4 /*yield*/, Promise.all(ec2InstanceInfo)];
-                case 13:
+                case 14:
                     instances = _c.sent();
                     instances.forEach(function (_a) {
                         var instanceId = _a.instanceId;
-                        resGen.associateInstanceProfileWithEc2(instanceId, instanceProfileArn);
+                        resGen.associateInstanceProfileWithEc2(instanceId, instanceProfileArn, params.Region);
                     });
                     instances.forEach(function (_a) {
                         var privateIpAddress = _a.privateIpAddress, isMasterNode = _a.isMasterNode;
@@ -121,22 +117,33 @@ function deployMultiAZ() {
                         else {
                         }
                     });
+                    _c.label = 15;
+                case 15:
+                    if (!true) return [3 /*break*/, 22];
+                    _c.label = 16;
+                case 16:
+                    _c.trys.push([16, 19, , 21]);
                     _b = (_a = resGen).configureYugabyteNodes;
                     return [4 /*yield*/, ec2InstanceInfo[0]];
-                case 14: return [4 /*yield*/, _b.apply(_a, [(_c.sent()).instanceId,
+                case 17: return [4 /*yield*/, _b.apply(_a, [(_c.sent()).instanceId,
                         params.SshUser,
-                        "us-east-1",
-                        Object.keys(azToCidr),
+                        params.Region,
+                        Object.values(cidrToAZ),
                         masterPrivateIpAddresses,
                         params.RFFactor])];
-                case 15:
+                case 18:
                     response = _c.sent();
-                    console.log("Not running, trying again");
-                    return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 10000); })];
-                case 16:
+                    return [3 /*break*/, 22];
+                case 19:
+                    err_1 = _c.sent();
+                    console.log("Error, trying again: " + err_1);
+                    return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 5000); })];
+                case 20:
                     _c.sent();
-                    return [4 /*yield*/, ec2InstanceInfo[0]];
-                case 17:
+                    return [3 /*break*/, 21];
+                case 21: return [3 /*break*/, 15];
+                case 22: return [4 /*yield*/, ec2InstanceInfo[0]];
+                case 23:
                     firstInstance = _c.sent();
                     console.log("View YB UI at: http://".concat(firstInstance.publicIp, ":7000"));
                     return [2 /*return*/, ""];
@@ -145,4 +152,3 @@ function deployMultiAZ() {
     });
 }
 deployMultiAZ();
-//nest.js
