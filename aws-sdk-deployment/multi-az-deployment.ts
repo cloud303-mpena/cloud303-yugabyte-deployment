@@ -2,7 +2,11 @@ import * as resGen from "./resource-generator";
 import { YugabyteParams } from "./types";
 
 async function deployMultiAZ(): Promise<string> {
+  //Prompts user for paramaters
   const params: YugabyteParams = await resGen.promptForParams();
+
+  //Creates key pair if it doesn't already exist
+  await resGen.createAndSaveKeyPair(params.KeyName, params.Region)
 
   const vpcId = await resGen.createVpc(params.Region, "10.0.0.0/16");
 

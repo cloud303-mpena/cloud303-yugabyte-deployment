@@ -51,10 +51,13 @@ exports.createNetworkInterfaceWithPublicIP = createNetworkInterfaceWithPublicIP;
 exports.configureYugabyteNodes = configureYugabyteNodes;
 exports.getAvailableAZs = getAvailableAZs;
 exports.buildNetworkConfig = buildNetworkConfig;
+exports.createAndSaveKeyPair = createAndSaveKeyPair;
 var client_ec2_1 = require("@aws-sdk/client-ec2");
 var client_ssm_1 = require("@aws-sdk/client-ssm");
 var inquirer_1 = require("inquirer");
 var client_iam_1 = require("@aws-sdk/client-iam");
+var fs_1 = require("fs");
+var path_1 = require("path");
 var DEFAULTS = {
     DBVersion: "2024.2.2.1-b190",
     RFFactor: 3,
@@ -102,8 +105,8 @@ function promptForParams() {
                         {
                             type: "input",
                             name: "KeyName",
-                            message: "KeyName (required)",
-                            default: "Key",
+                            message: "KeyName",
+                            default: "YugabyteKey",
                             validate: function (input) { return (input ? true : "KeyName is required."); },
                         },
                         {
@@ -1025,6 +1028,44 @@ function buildNetworkConfig(region, numberOfNodes) {
                         cidrToAZ[cidr] = az;
                     }
                     return [2 /*return*/, cidrToAZ];
+            }
+        });
+    });
+}
+/**
+ * Creates an EC2 key pair and saves the private key to a .pem file.
+ *
+ * @param {string} keyName - The name of the key pair to create.
+ * @param {region} region - name of the region for the ec2 client
+ * @returns {Promise<"success" | "fail">} - Returns "success" if the key was created and saved, otherwise "fail".
+ *
+ */
+function createAndSaveKeyPair(keyName, region) {
+    return __awaiter(this, void 0, void 0, function () {
+        var ec2Client, key, filePath, err_4;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    console.log("Creating key pair of name ".concat(keyName, " ..."));
+                    ec2Client = new client_ec2_1.EC2Client({ region: region });
+                    _a.label = 1;
+                case 1:
+                    _a.trys.push([1, 3, , 4]);
+                    return [4 /*yield*/, ec2Client.send(new client_ec2_1.CreateKeyPairCommand({ KeyName: keyName }))];
+                case 2:
+                    key = _a.sent();
+                    if (!key.KeyMaterial) {
+                        throw new Error("No KeyMaterial returned");
+                    }
+                    filePath = (0, path_1.resolve)("".concat(keyName, ".pem"));
+                    (0, fs_1.writeFileSync)(filePath, key.KeyMaterial, { mode: 256 });
+                    console.log("Private key saved to: ".concat(filePath));
+                    return [2 /*return*/, "success"];
+                case 3:
+                    err_4 = _a.sent();
+                    console.error("Error creating key pair:", err_4);
+                    return [2 /*return*/, "fail"];
+                case 4: return [2 /*return*/];
             }
         });
     });

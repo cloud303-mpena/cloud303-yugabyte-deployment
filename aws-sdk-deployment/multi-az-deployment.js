@@ -46,42 +46,47 @@ function deployMultiAZ() {
                 case 0: return [4 /*yield*/, resGen.promptForParams()];
                 case 1:
                     params = _c.sent();
-                    return [4 /*yield*/, resGen.createVpc(params.Region, "10.0.0.0/16")];
+                    //Creates key pair if it doesn't already exist
+                    return [4 /*yield*/, resGen.createAndSaveKeyPair(params.KeyName, params.Region)];
                 case 2:
+                    //Creates key pair if it doesn't already exist
+                    _c.sent();
+                    return [4 /*yield*/, resGen.createVpc(params.Region, "10.0.0.0/16")];
+                case 3:
                     vpcId = _c.sent();
                     return [4 /*yield*/, resGen.buildNetworkConfig(params.Region, params.NumberOfNodes)];
-                case 3:
+                case 4:
                     cidrToAZ = _c.sent();
                     return [4 /*yield*/, resGen.createSubnets(vpcId, params.Region, cidrToAZ)];
-                case 4:
+                case 5:
                     subnetIds = _c.sent();
                     return [4 /*yield*/, resGen.createInternetGatewayAndRouteTable(vpcId, params.Region)];
-                case 5:
+                case 6:
                     intIdAndRouteTableId = _c.sent();
                     return [4 /*yield*/, resGen.createSubnetRouteTableAssociations(subnetIds, intIdAndRouteTableId.routeTableId, params.Region)];
-                case 6:
+                case 7:
                     associationResponse = _c.sent();
                     return [4 /*yield*/, resGen.createYugaByteSecurityGroup(vpcId, "10.0.0.0/16", params.Region)];
-                case 7:
+                case 8:
                     securityGroupId = _c.sent();
                     netIntIds = [];
                     elasticIps = [];
                     _i = 0, subnetIds_1 = subnetIds;
-                    _c.label = 8;
-                case 8:
-                    if (!(_i < subnetIds_1.length)) return [3 /*break*/, 11];
+                    _c.label = 9;
+                case 9:
+                    if (!(_i < subnetIds_1.length)) return [3 /*break*/, 12];
                     subnetId = subnetIds_1[_i];
                     return [4 /*yield*/, resGen.createNetworkInterfaceWithPublicIP(subnetId, securityGroupId, params.Region)];
-                case 9:
+                case 10:
                     currNetIntIdAndIp = _c.sent();
                     netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
                     elasticIps.push(currNetIntIdAndIp.publicIp);
-                    _c.label = 10;
-                case 10:
+                    _c.label = 11;
+                case 11:
                     _i++;
-                    return [3 /*break*/, 8];
-                case 11: return [4 /*yield*/, resGen.createSSMInstanceRole("SSMPermissionRole")];
-                case 12:
+                    return [3 /*break*/, 9];
+                case 12: return [4 /*yield*/, resGen.createSSMInstanceRole("SSMPermissionRole")];
+                case 13:
                     instanceProfileArn = _c.sent();
                     azs = Object.values(cidrToAZ);
                     ec2InstanceInfo = [];
@@ -100,10 +105,10 @@ function deployMultiAZ() {
                                 }
                             });
                         }); }))];
-                case 13:
+                case 14:
                     _c.sent();
                     return [4 /*yield*/, Promise.all(ec2InstanceInfo)];
-                case 14:
+                case 15:
                     instances = _c.sent();
                     instances.forEach(function (_a) {
                         var instanceId = _a.instanceId;
@@ -118,38 +123,38 @@ function deployMultiAZ() {
                         }
                     });
                     numTries = 0;
-                    _c.label = 15;
-                case 15:
-                    if (!(numTries < 30)) return [3 /*break*/, 22];
                     _c.label = 16;
                 case 16:
-                    _c.trys.push([16, 19, , 21]);
+                    if (!(numTries < 30)) return [3 /*break*/, 23];
+                    _c.label = 17;
+                case 17:
+                    _c.trys.push([17, 20, , 22]);
                     _b = (_a = resGen).configureYugabyteNodes;
                     return [4 /*yield*/, ec2InstanceInfo[0]];
-                case 17: return [4 /*yield*/, _b.apply(_a, [(_c.sent()).instanceId,
+                case 18: return [4 /*yield*/, _b.apply(_a, [(_c.sent()).instanceId,
                         params.SshUser,
                         params.Region,
                         Object.values(cidrToAZ),
                         masterPrivateIpAddresses,
                         params.RFFactor])];
-                case 18:
-                    response = _c.sent();
-                    return [3 /*break*/, 22];
                 case 19:
+                    response = _c.sent();
+                    return [3 /*break*/, 23];
+                case 20:
                     err_1 = _c.sent();
                     numTries++;
                     console.log("Waiting for instance to be in valid state... " + err_1);
                     return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 5000); })];
-                case 20:
+                case 21:
                     _c.sent();
-                    return [3 /*break*/, 21];
-                case 21: return [3 /*break*/, 15];
-                case 22:
+                    return [3 /*break*/, 22];
+                case 22: return [3 /*break*/, 16];
+                case 23:
                     if (numTries >= 30) {
                         console.log("Instances timed out");
                     }
                     return [4 /*yield*/, ec2InstanceInfo[0]];
-                case 23:
+                case 24:
                     firstInstance = _c.sent();
                     console.log("View YB UI at: http://".concat(firstInstance.publicIp, ":7000"));
                     return [2 /*return*/, ""];

@@ -23,6 +23,7 @@ import {
   IamInstanceProfileSpecification,
   AssociateIamInstanceProfileCommand,
   DescribeAvailabilityZonesCommand,
+  CreateKeyPairCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -41,6 +42,8 @@ import {
   GetInstanceProfileCommand,
 } from "@aws-sdk/client-iam";
 import { get } from "http";
+import { writeFileSync } from "fs";
+import { resolve } from "path";
 
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
@@ -87,8 +90,8 @@ export async function promptForParams(): Promise<YugabyteParams> {
     {
       type: "input",
       name: "KeyName",
-      message: "KeyName (required)",
-      default: "Key",
+      message: "KeyName",
+      default: "YugabyteKey",
       validate: (input) => (input ? true : "KeyName is required."),
     },
     {
@@ -1046,4 +1049,30 @@ export async function buildNetworkConfig(region: string, numberOfNodes: number):
   }
   
   return cidrToAZ;
+}
+/**
+ * Creates an EC2 key pair and saves the private key to a .pem file.
+ *
+ * @param {string} keyName - The name of the key pair to create.
+ * @param {region} region - name of the region for the ec2 client
+ * @returns {Promise<"success" | "fail">} - Returns "success" if the key was created and saved, otherwise "fail".
+ *
+ */
+export async function createAndSaveKeyPair(keyName: string, region: string): Promise<"success" | "fail"> {
+  console.log(`Creating key pair of name ${keyName} ...`)
+  const ec2Client = new EC2Client({region: region})
+  try {
+    const key = await ec2Client.send(new CreateKeyPairCommand({ KeyName: keyName }));
+    if (!key.KeyMaterial){
+      throw new Error("No KeyMaterial returned");
+    }
+    const filePath = resolve(`${keyName}.pem`);
+    writeFileSync(filePath, key.KeyMaterial, { mode: 0o400 });
+
+    console.log(`Private key saved to: ${filePath}`);
+    return "success";
+  } catch (err) {
+    console.error("Error creating key pair:", err);
+    return "fail";
+  }
 }
