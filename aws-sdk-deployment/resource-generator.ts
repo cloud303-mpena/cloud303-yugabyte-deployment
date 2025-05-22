@@ -38,7 +38,6 @@ import {
   AddRoleToInstanceProfileCommand,
 } from "@aws-sdk/client-iam";
 
-
 export async function createSSMInstanceRole(roleName: string) {
   const iamClient = new IAMClient({ region: "us-east-1" });
 
@@ -202,15 +201,13 @@ export async function createEC2Instance(
 
     //LOOK HERE!!
     const iamInstanceProfileSpec: IamInstanceProfileSpecification = {
-      Name: name
+      Name: "SSMPermissionRole"
     };
 
     const instanceParams = {
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
       IamInstanceProfile: iamInstanceProfileSpec,
-
-
       MinCount: 1,
       MaxCount: 1,
       KeyName: keyName,

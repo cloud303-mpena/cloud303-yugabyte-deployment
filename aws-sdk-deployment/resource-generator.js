@@ -229,9 +229,7 @@ function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_
                 case 4:
                     instanceParams = (_a.ImageId = _c.sent(),
                         _a.InstanceType = instanceType,
-                        _a.IamInstanceProfile = {
-                            iamInstanceProfileSpec: iamInstanceProfileSpec
-                        },
+                        _a.IamInstanceProfile = iamInstanceProfileSpec,
                         _a.MinCount = 1,
                         _a.MaxCount = 1,
                         _a.KeyName = keyName,

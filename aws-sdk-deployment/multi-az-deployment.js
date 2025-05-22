@@ -78,7 +78,7 @@ function deployMultiAZ() {
                     return [4 /*yield*/, resGen.createNetworkInterfaceWithPublicIP(subnetId, securityGroupId)];
                 case 8:
                     currNetIntIdAndIp = _a.sent();
-                    netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
+                    netIntIds.push(currNetIntIdAndIp.networkInterfaceId); // This is correct!
                     elasticIps.push(currNetIntIdAndIp.publicIp);
                     _a.label = 9;
                 case 9:
@@ -91,7 +91,7 @@ function deployMultiAZ() {
                     ec2InstanceInfo = [];
                     masterPrivateIpAddresses = [];
                     for (i = 0; i < params.RFFactor; i++) {
-                        ec2InstanceInfo.push(resGen.createEC2Instance("us-east-1", params.InstanceType, params.LatestAmiId, params.KeyName, securityGroupId, netIntIds[i], vpcId, true, netIntIds, azs[i]));
+                        ec2InstanceInfo.push(resGen.createEC2Instance("yugabyte-".concat(i), "us-east-1", params.InstanceType, params.LatestAmiId, params.KeyName, securityGroupId, netIntIds[i], vpcId, true, netIntIds, azs[i]));
                     }
                     return [4 /*yield*/, Promise.all(ec2InstanceInfo.map(function (instancePromise) { return __awaiter(_this, void 0, void 0, function () {
                             var instance;
