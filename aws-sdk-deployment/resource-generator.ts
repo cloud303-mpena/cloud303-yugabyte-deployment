@@ -313,10 +313,12 @@ export async function createEC2Instance(
     if (!instanceId) {
       throw new Error("Instance ID is undefined.");
     }
-
+    const publicIp = await ec2Client.send(new DescribeNetworkInterfacesCommand({ NetworkInterfaceIds: [netIntId] }))
+  .then(res => res.NetworkInterfaces?.[0]?.Association?.PublicIp);
     return {
       instanceId,
       privateIpAddress,
+      publicIp,
       isMasterNode,
     };
   } catch (err) {

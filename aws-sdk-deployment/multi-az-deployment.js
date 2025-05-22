@@ -39,7 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var resGen = require("./resource-generator");
 function deployMultiAZ() {
     return __awaiter(this, void 0, void 0, function () {
-        var params, vpcId, cidrToAZ, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, elasticIps, _i, subnetIds_1, subnetId, currNetIntIdAndIp, instanceProfileArn, azs, ec2InstanceInfo, masterPrivateIpAddresses, i, instances, response, _a, _b, err_1, firstInstance;
+        var params, vpcId, cidrToAZ, subnetIds, intIdAndRouteTableId, associationResponse, securityGroupId, netIntIds, elasticIps, _i, subnetIds_1, subnetId, currNetIntIdAndIp, instanceProfileArn, azs, ec2InstanceInfo, masterPrivateIpAddresses, i, instances, numTries, response, _a, _b, err_1, firstInstance;
         var _this = this;
         return __generator(this, function (_c) {
             switch (_c.label) {
@@ -117,9 +117,10 @@ function deployMultiAZ() {
                         else {
                         }
                     });
+                    numTries = 0;
                     _c.label = 15;
                 case 15:
-                    if (!true) return [3 /*break*/, 22];
+                    if (!(numTries < 30)) return [3 /*break*/, 22];
                     _c.label = 16;
                 case 16:
                     _c.trys.push([16, 19, , 21]);
@@ -136,13 +137,18 @@ function deployMultiAZ() {
                     return [3 /*break*/, 22];
                 case 19:
                     err_1 = _c.sent();
-                    console.log("Error, trying again: " + err_1);
+                    numTries++;
+                    console.log("Waiting for instance to be in valid state... " + err_1);
                     return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, 5000); })];
                 case 20:
                     _c.sent();
                     return [3 /*break*/, 21];
                 case 21: return [3 /*break*/, 15];
-                case 22: return [4 /*yield*/, ec2InstanceInfo[0]];
+                case 22:
+                    if (numTries >= 30) {
+                        console.log("Instances timed out");
+                    }
+                    return [4 /*yield*/, ec2InstanceInfo[0]];
                 case 23:
                     firstInstance = _c.sent();
                     console.log("View YB UI at: http://".concat(firstInstance.publicIp, ":7000"));

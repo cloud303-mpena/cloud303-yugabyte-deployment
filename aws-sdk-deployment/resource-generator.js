@@ -262,7 +262,7 @@ function createSSMInstanceRole(roleName) {
  */
 function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_1, netIntId_1) {
     return __awaiter(this, arguments, void 0, function (name, region, instanceType, imageId, keyName, netIntId, isMasterNode, masterNetIntIds, zone, sshUser) {
-        var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, instanceParams, command, data, instance, instanceId, privateIpAddress, err_1;
+        var ec2Client, blockDeviceMappings, nodePrivateIp, masterPrivateIps, instanceParams, command, data, instance, instanceId, privateIpAddress, publicIp, err_1;
         var _a;
         var _b;
         if (isMasterNode === void 0) { isMasterNode = false; }
@@ -272,7 +272,7 @@ function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_
                     ec2Client = new client_ec2_1.EC2Client({ region: region });
                     _c.label = 1;
                 case 1:
-                    _c.trys.push([1, 7, , 8]);
+                    _c.trys.push([1, 8, , 9]);
                     blockDeviceMappings = [
                         {
                             DeviceName: "/dev/xvda",
@@ -325,16 +325,21 @@ function createEC2Instance(name_1, region_1, instanceType_1, imageId_1, keyName_
                     if (!instanceId) {
                         throw new Error("Instance ID is undefined.");
                     }
+                    return [4 /*yield*/, ec2Client.send(new client_ec2_1.DescribeNetworkInterfacesCommand({ NetworkInterfaceIds: [netIntId] }))
+                            .then(function (res) { var _a, _b, _c; return (_c = (_b = (_a = res.NetworkInterfaces) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.Association) === null || _c === void 0 ? void 0 : _c.PublicIp; })];
+                case 7:
+                    publicIp = _c.sent();
                     return [2 /*return*/, {
                             instanceId: instanceId,
                             privateIpAddress: privateIpAddress,
+                            publicIp: publicIp,
                             isMasterNode: isMasterNode,
                         }];
-                case 7:
+                case 8:
                     err_1 = _c.sent();
                     console.error("Error creating EC2 instance:", err_1);
                     throw err_1;
-                case 8: return [2 /*return*/];
+                case 9: return [2 /*return*/];
             }
         });
     });
@@ -1024,5 +1029,3 @@ function buildNetworkConfig(region, numberOfNodes) {
         });
     });
 }
-// Usage:
-// const cidrToAZ = await buildNetworkConfig(params.Region, params.NumberOfNodes);

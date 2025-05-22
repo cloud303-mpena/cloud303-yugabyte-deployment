@@ -6,7 +6,10 @@ async function deployMultiAZ(): Promise<string> {
 
   const vpcId = await resGen.createVpc(params.Region, "10.0.0.0/16");
 
-  const cidrToAZ = await resGen.buildNetworkConfig(params.Region, params.NumberOfNodes)
+  const cidrToAZ = await resGen.buildNetworkConfig(
+    params.Region,
+    params.NumberOfNodes
+  );
   const subnetIds = await resGen.createSubnets(vpcId!, params.Region, cidrToAZ);
 
   const intIdAndRouteTableId = await resGen.createInternetGatewayAndRouteTable(
@@ -38,7 +41,9 @@ async function deployMultiAZ(): Promise<string> {
     elasticIps.push(currNetIntIdAndIp.publicIp);
   }
 
-  const instanceProfileArn = await resGen.createSSMInstanceRole("SSMPermissionRole")
+  const instanceProfileArn = await resGen.createSSMInstanceRole(
+    "SSMPermissionRole"
+  );
 
   const azs = Object.values(cidrToAZ);
 
@@ -59,7 +64,7 @@ async function deployMultiAZ(): Promise<string> {
         params.LatestAmiId,
         params.KeyName,
         netIntIds[i],
-        i < params.RFFactor? true: false,
+        i < params.RFFactor ? true : false,
         netIntIds,
         azs[i],
         params.SshUser
@@ -75,8 +80,12 @@ async function deployMultiAZ(): Promise<string> {
   );
 
   const instances = await Promise.all(ec2InstanceInfo);
-  instances.forEach(({ instanceId}) => {
-    resGen.associateInstanceProfileWithEc2(instanceId, instanceProfileArn, params.Region)
+  instances.forEach(({ instanceId }) => {
+    resGen.associateInstanceProfileWithEc2(
+      instanceId,
+      instanceProfileArn,
+      params.Region
+    );
   });
 
   instances.forEach(({ privateIpAddress, isMasterNode }) => {
@@ -86,28 +95,33 @@ async function deployMultiAZ(): Promise<string> {
     }
   });
 
-while (true) {
-  try {
-    const response = await resGen.configureYugabyteNodes(
-      (await ec2InstanceInfo[0]).instanceId,
-      params.SshUser,
-      params.Region,
-      Object.values(cidrToAZ),
-      masterPrivateIpAddresses,
-      params.RFFactor
-    );
-    break; 
-  } catch (err) {
-    console.log("Error, trying again: " + err);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+  let numTries = 0;
+  while (numTries < 30) {
+    try {
+      const response = await resGen.configureYugabyteNodes(
+        (
+          await ec2InstanceInfo[0]
+        ).instanceId,
+        params.SshUser,
+        params.Region,
+        Object.values(cidrToAZ),
+        masterPrivateIpAddresses,
+        params.RFFactor
+      );
+      break;
+    } catch (err) {
+      numTries++;
+      console.log("Waiting for instance to be in valid state... " + err);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
   }
-}
 
+  if (numTries >= 30) {
+    console.log("Instances timed out");
+  }
   const firstInstance = await ec2InstanceInfo[0];
   console.log(`View YB UI at: http://${firstInstance.publicIp}:7000`);
   return "";
 }
 
 deployMultiAZ();
-
-
