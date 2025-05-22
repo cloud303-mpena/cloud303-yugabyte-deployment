@@ -40,69 +40,6 @@ import {
   GetInstanceProfileCommand,
 } from "@aws-sdk/client-iam";
 
-export async function createSSMInstanceRole(roleName: string): Promise<string> {
-  const iamClient = new IAMClient({ region: "us-east-1" });
-  // Trust policy for EC2
-  const assumeRolePolicyDocument = JSON.stringify({
-    Version: "2012-10-17",
-    Statement: [
-      {
-        Effect: "Allow",
-        Principal: {
-          Service: "ec2.amazonaws.com",
-        },
-        Action: "sts:AssumeRole",
-      },
-    ],
-  });
-
-  // 1. Create IAM Role
-  await iamClient.send(
-    new CreateRoleCommand({
-      RoleName: roleName,
-      AssumeRolePolicyDocument: assumeRolePolicyDocument,
-    })
-  );
-
-  // 2. Attach AmazonSSMManagedInstanceCore Policy
-  await iamClient.send(
-    new AttachRolePolicyCommand({
-      RoleName: roleName,
-      PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-    })
-  );
-
-  // 3. Create Instance Profile (required for EC2 attachment)
-  await iamClient.send(
-    new CreateInstanceProfileCommand({
-      InstanceProfileName: roleName,
-    })
-  );
-
-  // 4. Add Role to Instance Profile
-  await iamClient.send(
-    new AddRoleToInstanceProfileCommand({
-      InstanceProfileName: roleName,
-      RoleName: roleName,
-    })
-  );
-
-  // 5. Get the instance profile to retrieve its ARN
-  const getInstanceProfileResponse = await iamClient.send(
-    new GetInstanceProfileCommand({
-      InstanceProfileName: roleName,
-    })
-  );
-
-  const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
-
-  console.log(
-    `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
-  );
-
-  return instanceProfileArn || "";
-}
-
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
   RFFactor: 3,
@@ -117,6 +54,12 @@ const DEFAULTS: YugabyteParams = {
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
 const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
+
+/**
+ * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
+ * 
+ * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
+ */
 export async function promptForParams(): Promise<YugabyteParams> {
   const answers = await inquirer.prompt([
     {
@@ -175,9 +118,101 @@ export async function promptForParams(): Promise<YugabyteParams> {
   return answers as YugabyteParams;
 }
 /**
- * Creates an EC2 instance in the network interface it is passed.
- * Sets up user data to install necessary libraries, start necessary tools, and initialize tserver and master server
+ * Creates an IAM role and instance profile with SSM permissions for EC2 instances.
+ * 
+ * This function performs the following operations:
+ * 1. Creates an IAM role with EC2 trust relationship
+ * 2. Attaches the AmazonSSMManagedInstanceCore policy to the role
+ * 3. Creates an instance profile with the same name as the role
+ * 4. Adds the role to the instance profile
+ * 5. Retrieves and returns the ARN of the created instance profile
  *
+ * @param {string} roleName - The name to use for both the IAM role and instance profile
+ * @returns {Promise<string>} A promise that resolves to the ARN of the created instance profile
+ * @throws {Error} If any of the IAM operations fail during role or profile creation
+ */
+export async function createSSMInstanceRole(roleName: string): Promise<string> {
+  const iamClient = new IAMClient({ region: "us-east-1" });
+  //Trust policy for EC2
+  const assumeRolePolicyDocument = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Principal: {
+          Service: "ec2.amazonaws.com",
+        },
+        Action: "sts:AssumeRole",
+      },
+    ],
+  });
+
+  // Create IAM Role
+  await iamClient.send(
+    new CreateRoleCommand({
+      RoleName: roleName,
+      AssumeRolePolicyDocument: assumeRolePolicyDocument,
+    })
+  );
+
+  // Attach AmazonSSMManagedInstanceCore Policy
+  await iamClient.send(
+    new AttachRolePolicyCommand({
+      RoleName: roleName,
+      PolicyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    })
+  );
+
+  // Create Instance Profile (required for EC2 attachment)
+  await iamClient.send(
+    new CreateInstanceProfileCommand({
+      InstanceProfileName: roleName,
+    })
+  );
+
+  // Add Role to Instance Profile
+  await iamClient.send(
+    new AddRoleToInstanceProfileCommand({
+      InstanceProfileName: roleName,
+      RoleName: roleName,
+    })
+  );
+
+  // Get the instance profile to retrieve its ARN
+  const getInstanceProfileResponse = await iamClient.send(
+    new GetInstanceProfileCommand({
+      InstanceProfileName: roleName,
+    })
+  );
+
+  const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
+
+  console.log(
+    `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
+  );
+
+  return instanceProfileArn || "";
+}
+
+
+/**
+ * Creates an EC2 instance with specified configurations and waits until it is running.
+ * 
+ * @param {string} name - The name to assign to the EC2 instance.
+ * @param {string} region - The AWS region where the instance will be created.
+ * @param {string} instanceType - The type of instance to create (e.g., t2.micro).
+ * @param {string} imageId - The ID of the AMI to use for the instance.
+ * @param {string} keyName - The name of the key pair to use for SSH access.
+ * @param {string} netIntId - The network interface ID to associate with the instance.
+ * @param {boolean} [isMasterNode=false] - Flag indicating if the instance is a master node.
+ * @param {string[]} masterNetIntIds - List of network interface IDs for master nodes.
+ * @param {string} zone - The availability zone for the instance.
+ * @param {string} sshUser - The SSH username for accessing the instance.
+ * 
+ * @returns {Promise<{instanceId: string, privateIpAddress: string, isMasterNode: boolean}>} 
+ * An object containing the instance ID, private IP address, and master node status.
+ * 
+ * @throws Will throw an error if the instance creation fails.
  */
 export async function createEC2Instance(
   name: string,
@@ -185,14 +220,11 @@ export async function createEC2Instance(
   instanceType: string,
   imageId: string,
   keyName: string,
-  securityGroup: string,
   netIntId: string,
-  vpcId: string,
-  instanceProfileArn: string,
   isMasterNode: boolean = false,
-  masterNetIntIds: string[] = [],
-  zone?: string,
-  sshUser: string = "ubuntu"
+  masterNetIntIds: string[],
+  zone: string,
+  sshUser: string
 ) {
   const ec2Client = new EC2Client({ region });
   try {
@@ -210,10 +242,11 @@ export async function createEC2Instance(
     //gets internal ip addresses from other nodes
     const nodePrivateIp = await getPrimaryPrivateIpAddress(netIntId);
     const masterPrivateIps = await Promise.all(
-      masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(id))
+      masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(id, false))
     );
 
     const instanceParams = {
+      Name: name,
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
       MinCount: 1,
@@ -266,6 +299,16 @@ export async function createEC2Instance(
     throw err;
   }
 }
+/**
+ * Associates an IAM instance profile with a specified EC2 instance.
+ * 
+ * @param {string} instanceId - The ID of the EC2 instance to associate with the instance profile.
+ * @param {string} instanceProfileArn - The ARN of the IAM instance profile to associate with the EC2 instance.
+ * 
+ * @returns {Promise<void>} A promise that resolves when the association is complete.
+ * 
+ * This function logs the association process and uses the AWS SDK to send the 
+ */
 export async function associateInstanceProfileWithEc2(
   instanceId: string,
   instanceProfileArn: string
@@ -281,8 +324,21 @@ export async function associateInstanceProfileWithEc2(
     })
   );
 }
+
+/**
+ * Retrieves the primary private IP address associated with a specified network interface.
+ * 
+ * @param {string} networkInterfaceId - The ID of the network interface to query.
+ * @param {boolean} doPrint - Whether or not to print the ip
+ * @returns {Promise<string>} A promise that resolves to the primary private IP address of the network interface.
+ * 
+ * @throws Will throw an error if the network interface is not found or if no primary private IP address is available.
+ * 
+ * This function utilizes the EC2 client to send a DescribeNetworkInterfacesCommand and logs the process.
+ */
 export async function getPrimaryPrivateIpAddress(
-  networkInterfaceId: string
+  networkInterfaceId: string,
+  doPrint: boolean = true
 ): Promise<string> {
   // Initialize the EC2 client
   const ec2Client = new EC2Client({});
@@ -312,10 +368,11 @@ export async function getPrimaryPrivateIpAddress(
         `No primary private IP address found for network interface ${networkInterfaceId}`
       );
     }
-
-    console.log(
-      `Primary private IP address for ${networkInterfaceId}: ${primaryPrivateIpAddress}`
-    );
+    if(doPrint){
+      console.log(
+        `Primary private IP address for ${networkInterfaceId}: ${primaryPrivateIpAddress}`
+      );
+    }
     return primaryPrivateIpAddress;
   } catch (error) {
     console.error(
@@ -325,7 +382,21 @@ export async function getPrimaryPrivateIpAddress(
     throw error;
   }
 }
-// Helper function to generate the user data script for the EC2 instance
+/**
+ * Generates user data script for EC2 instances in a cluster configuration.
+ * 
+ * Creates a customized initialization script based on whether the node is a master node
+ * or a worker node, incorporating network configuration, and SSH access.
+ *
+ * @param {boolean} isMasterNode - Whether this node is a master node in the cluster
+ * @param {string[]} masterPrivateIps - Array of private IP addresses of all master nodes
+ * @param {string} zone - The availability zone where the instance is deployed
+ * @param {string} region - The AWS region where the instance is deployed
+ * @param {string} sshUser - The username for SSH access to be configured on the instance
+ * @param {string} nodePrivateIp - The private IP address of the node being configured
+ * @returns {string} Base64 encoded user-data script for initialization
+ * 
+ */
 function generateUserData(
   isMasterNode: boolean,
   masterPrivateIps: string[],
@@ -419,9 +490,15 @@ export async function waitForInstanceRunning(
   }
 }
 
+/**
+ * Creates an AWS VPC with the specified CIDR block and name tag.
+ *
+ * @param {string} cidrBlock - The IPv4 CIDR block for the VPC
+ * @param {string} name - The name to assign to the VPC via tagging
+ * @returns {Promise<string | undefined>} The ID of the created VPC or undefined if creation fails
+ */
 export async function createVpc(
   cidrBlock: string,
-  name: string
 ): Promise<string | undefined> {
   const ec2Client = new EC2Client({ region: "us-east-1" });
 
@@ -441,10 +518,16 @@ export async function createVpc(
     return undefined;
   }
 }
-
+/**
+ * Creates multiple subnets in the specified VPC across different availability zones.
+ *
+ * @param {string} vpcId - The ID of the VPC where subnets will be created
+ * @param {Object} azToCidr - Mapping of availability zones to CIDR blocks
+ * @returns {Promise<string[]>} Array of created subnet IDs
+ */
 export async function createSubnets(
   vpcId: string,
-  azToCidr: { [az: string]: string } // e.g., { "us-east-1a": "10.0.0.0/24", "us-east-1b": "10.0.1.0/24" }
+  azToCidr: { [az: string]: string }
 ): Promise<string[]> {
   const ec2Client = new EC2Client({ region: "us-east-1" });
   const subnetIds: string[] = [];
@@ -468,7 +551,13 @@ export async function createSubnets(
   console.log("Subnets created!");
   return subnetIds;
 }
-
+/**
+ * Creates a security group for YugabyteDB with the necessary inbound and outbound rules.
+ *
+ * @param {string} vpcId - The ID of the VPC where the security group will be created
+ * @param {string} vpcCidr - The CIDR block of the VPC for configuring security group rules
+ * @returns {Promise<string>} The ID of the created security group
+ */
 export async function createYugaByteSecurityGroup(
   vpcId: string,
   vpcCidr: string
@@ -771,7 +860,18 @@ export async function createNetworkInterfaceWithPublicIP(
     throw error;
   }
 }
-
+/**
+ * Configures YugabyteDB nodes with appropriate replication settings and placement policies.
+ * Uses ssm client to run bash command
+ *
+ * @param {string} instanceId - The EC2 instance ID of the YugabyteDB node
+ * @param {string} sshUser - The SSH username for connecting to the instance
+ * @param {string} region - The AWS region where the node is deployed
+ * @param {string[]} zones - Array of availability zones used in the deployment
+ * @param {string[]} masterAddresses - Array of YugabyteDB master addresses
+ * @param {number} replicationFactor - The replication factor for YugabyteDB (default: 3)
+ * @param {string} scriptUrl - URL to the configuration script (default: GitHub URL)
+ */
 export async function configureYugabyteNodes(
   instanceId: string,
   sshUser: string,
@@ -812,6 +912,13 @@ export async function configureYugabyteNodes(
 
   return response;
 }
+
+/**
+ * Retrieves an AMI ID from AWS Systems Manager Parameter Store.
+ *
+ * @param {string} parameterName - The name of the SSM parameter containing the AMI ID
+ * @returns {Promise<string>} The AMI ID stored in the parameter, or empty string if not found
+ */
 async function getAmiIdFromSSM(parameterName: string): Promise<string> {
   const client = new SSMClient({ region: "us-east-1" });
 

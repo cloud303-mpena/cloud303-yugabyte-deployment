@@ -6,7 +6,7 @@ import { waitForDebugger } from "inspector";
 async function deployMultiAZ(): Promise<string> {
   const params: YugabyteParams = await resGen.promptForParams();
 
-  const vpcId = await resGen.createVpc("10.0.0.0/16", "Yugabyte VPC");
+  const vpcId = await resGen.createVpc("10.0.0.0/16");
 
   //TODO: CHANGE THIS TO DO BY REGION LATER
   let azToCidr: { [az: string]: string } = {};
@@ -72,13 +72,11 @@ async function deployMultiAZ(): Promise<string> {
         params.InstanceType,
         params.LatestAmiId,
         params.KeyName,
-        securityGroupId,
         netIntIds[i],
-        vpcId!,
-        instanceProfileArn,
         true,
         netIntIds,
-        azs[i]
+        azs[i],
+        params.SshUser
       )
     );
   }
@@ -122,5 +120,3 @@ async function deployMultiAZ(): Promise<string> {
 }
 
 deployMultiAZ();
-
-//nest.js
