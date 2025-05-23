@@ -23,7 +23,8 @@ import {
   IamInstanceProfileSpecification,
   AssociateIamInstanceProfileCommand,
   DescribeAvailabilityZonesCommand,
-  CreateKeyPairCommand,
+  CreateKeyPairCommand, Tag,
+  TagSpecification,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -45,6 +46,12 @@ import { get } from "http";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
+const managedTag = { Key: "c303-yugabyte-managed", Value: "true", };
+
+const managedTagType: Tag = {
+  Key: "c303-yugabyte-managed",
+  Value: "true",
+}
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
   RFFactor: 3,
@@ -173,6 +180,7 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
       new CreateRoleCommand({
         RoleName: roleName,
         AssumeRolePolicyDocument: assumeRolePolicyDocument,
+        Tags: [managedTag],
       })
     );
 
@@ -188,6 +196,7 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
     await iamClient.send(
       new CreateInstanceProfileCommand({
         InstanceProfileName: roleName,
+        Tags: [managedTag],
       })
     );
 
@@ -270,6 +279,11 @@ export async function createEC2Instance(
       masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(region, id, false))
     );
 
+    const ec2TagSpec: TagSpecification = {
+      ResourceType: "instance",
+      Tags: [managedTag],
+    }
+
     const instanceParams = {
       Name: name,
       ImageId: await getAmiIdFromSSM(imageId),
@@ -294,6 +308,7 @@ export async function createEC2Instance(
           nodePrivateIp
         )
       ).toString("base64"),
+      TagSpecifications: [ec2TagSpec]
     };
 
     // Create the instance
@@ -569,12 +584,18 @@ export async function createSubnets(
   const ec2Client = new EC2Client({ region: region});
   const subnetIds: string[] = [];
   console.log("Creating subnets...");
-  
+
+  const subnetTagSpec: TagSpecification = {
+    ResourceType: "subnet",
+    Tags: [managedTag],
+  }
+
   for (const [cidr, az] of Object.entries(cidrToAZ)) {
     const subnetCommand = new CreateSubnetCommand({
       VpcId: vpcId,
       AvailabilityZone: az,
       CidrBlock: cidr,
+      TagSpecifications: [subnetTagSpec]
     });
     const result = await ec2Client.send(subnetCommand);
     const subnetId = result.Subnet?.SubnetId;
@@ -617,6 +638,7 @@ export async function createYugaByteSecurityGroup(
             Key: "Name",
             Value: "YugaByteSecurityGroup",
           },
+          managedTag,
         ],
       },
     ],
@@ -848,12 +870,18 @@ export async function createNetworkInterfaceWithPublicIP(
 ): Promise<{ networkInterfaceId: string; publicIp: string }> {
   const ec2Client = new EC2Client({region: region});
 
+  const netTagSpec: TagSpecification = {
+    ResourceType: "network-interface",
+    Tags: [managedTag],
+  }
+
   try {
     // Step 1: Create the network interface
     const createResponse = await ec2Client.send(
       new CreateNetworkInterfaceCommand({
         SubnetId: subnetId,
         Groups: [securityGroupId],
+        TagSpecifications: [netTagSpec],
       })
     );
 
