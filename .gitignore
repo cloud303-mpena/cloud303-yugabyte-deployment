@@ -1,3 +1,5 @@
 .qodo
 node_modules
 *.js
+*.pem
+*.out
