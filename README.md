@@ -1,6 +1,11 @@
 # Cloud303 Yugabyte Deployments
 This repo is comprised of a cloudformation version and an AWS SDK Typescript version of the yugabyte deployment code.
 # AWS SDK
+To Run:
+ Navigate to aws-sdk-deployment
+ Compile ts all files to js using tsc: "tsc *.ts"
+ Run multi-az deployments.js once compiled using node
+
 //TODO: Write Documentation
 
 # Cloudformation
