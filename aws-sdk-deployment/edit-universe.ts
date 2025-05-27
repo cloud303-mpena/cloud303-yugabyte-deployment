@@ -6,7 +6,20 @@ import {
     DescribeNetworkInterfacesCommand,
     ReleaseAddressCommand,
     DescribeAddressesCommand,
-    Tag, waitUntilInstanceRunning, waitUntilInstanceTerminated,
+    Tag,
+    waitUntilInstanceTerminated,
+    DescribeVpcsCommand,
+    DeleteVpcCommand,
+    DescribeInternetGatewaysCommand,
+    DetachInternetGatewayCommand,
+    DeleteInternetGatewayCommand,
+    DescribeSubnetsCommand,
+    DeleteSubnetCommand,
+    DescribeSecurityGroupsCommand,
+    DeleteSecurityGroupCommand,
+    DescribeRouteTablesCommand,
+    DeleteRouteTableCommand,
+    DisassociateRouteTableCommand
 } from "@aws-sdk/client-ec2";
 import {
     IAMClient,
@@ -16,7 +29,10 @@ import {
     DeleteRolePolicyCommand,
     ListAttachedRolePoliciesCommand,
     ListRolesCommand,
-    ListRoleTagsCommand
+    ListRoleTagsCommand,
+    ListInstanceProfilesCommand,
+    RemoveRoleFromInstanceProfileCommand,
+    DeleteInstanceProfileCommand
 } from "@aws-sdk/client-iam";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -94,7 +110,7 @@ async function destroyUniverse() {
                 console.log(instanceList.join("\n"));
 
                 // Wait for instances to terminate before proceeding
-                console.log("Waiting for instances to terminate...");
+                console.log("Waiting for instances to terminate... (This may take a while)");
                 for (const i of instanceIds){
                     await waitUntilInstanceTerminated(
                         { client: ec2Client, maxWaitTime: 1000 },
@@ -198,8 +214,137 @@ async function destroyUniverse() {
         console.error("Error during Elastic IP release:", error);
     }
 
-    // --- 4. Delete IAM Role ---
-    console.log("\nStep 4: Deleting IAM Role...");
+    // --- 4. Delete VPCs and related resources ---
+    console.log("\nStep 4: Deleting VPCs and related resources...");
+    try {
+        // Find VPCs tagged with our managed tag
+        const describeVpcsCommand = new DescribeVpcsCommand({
+            Filters: [
+                {
+                    Name: "tag:c303-yugabyte-managed",
+                    Values: ["true"],
+                },
+            ],
+        });
+        const vpcsResponse = await ec2Client.send(describeVpcsCommand);
+
+        if (vpcsResponse.Vpcs && vpcsResponse.Vpcs.length > 0) {
+            console.log(`Found ${vpcsResponse.Vpcs.length} VPCs to delete`);
+
+            for (const vpc of vpcsResponse.Vpcs) {
+                const vpcId = vpc.VpcId;
+                console.log(`Processing VPC: ${vpcId}`);
+
+                // 1. Delete route table associations and route tables
+                const routeTablesCommand = new DescribeRouteTablesCommand({
+                    Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+                });
+                const routeTablesResponse = await ec2Client.send(routeTablesCommand);
+
+                if (routeTablesResponse.RouteTables) {
+                    for (const routeTable of routeTablesResponse.RouteTables) {
+                        // Skip the main route table (it will be deleted with the VPC)
+                        if (routeTable.Associations && routeTable.Associations.some(assoc => assoc.Main)) {
+                            console.log(`  • Skipping main route table: ${routeTable.RouteTableId}`);
+                            continue;
+                        }
+
+                        // Disassociate route table associations
+                        if (routeTable.Associations) {
+                            for (const association of routeTable.Associations) {
+                                if (association.RouteTableAssociationId) {
+                                    await ec2Client.send(new DisassociateRouteTableCommand({
+                                        AssociationId: association.RouteTableAssociationId
+                                    }));
+                                    console.log(`  • Disassociated route table association: ${association.RouteTableAssociationId}`);
+                                }
+                            }
+                        }
+
+                        // Delete route table
+                        await ec2Client.send(new DeleteRouteTableCommand({
+                            RouteTableId: routeTable.RouteTableId
+                        }));
+                        console.log(`  • Deleted route table: ${routeTable.RouteTableId}`);
+                    }
+                }
+
+                // 2. Detach and delete internet gateways
+                const internetGatewaysCommand = new DescribeInternetGatewaysCommand({
+                    Filters: [{ Name: "attachment.vpc-id", Values: [vpcId] }]
+                });
+                const internetGatewaysResponse = await ec2Client.send(internetGatewaysCommand);
+
+                if (internetGatewaysResponse.InternetGateways) {
+                    for (const igw of internetGatewaysResponse.InternetGateways) {
+                        // Detach the IGW from the VPC
+                        await ec2Client.send(new DetachInternetGatewayCommand({
+                            InternetGatewayId: igw.InternetGatewayId,
+                            VpcId: vpcId
+                        }));
+                        console.log(`  • Detached internet gateway: ${igw.InternetGatewayId}`);
+
+                        // Delete the IGW
+                        await ec2Client.send(new DeleteInternetGatewayCommand({
+                            InternetGatewayId: igw.InternetGatewayId
+                        }));
+                        console.log(`  • Deleted internet gateway: ${igw.InternetGatewayId}`);
+                    }
+                }
+
+                // 3. Delete subnets
+                const subnetsCommand = new DescribeSubnetsCommand({
+                    Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+                });
+                const subnetsResponse = await ec2Client.send(subnetsCommand);
+
+                if (subnetsResponse.Subnets) {
+                    for (const subnet of subnetsResponse.Subnets) {
+                        await ec2Client.send(new DeleteSubnetCommand({
+                            SubnetId: subnet.SubnetId
+                        }));
+                        console.log(`  • Deleted subnet: ${subnet.SubnetId}`);
+                    }
+                }
+
+                // 4. Delete security groups (except the default one which is deleted with the VPC)
+                const securityGroupsCommand = new DescribeSecurityGroupsCommand({
+                    Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+                });
+                const securityGroupsResponse = await ec2Client.send(securityGroupsCommand);
+
+                if (securityGroupsResponse.SecurityGroups) {
+                    for (const sg of securityGroupsResponse.SecurityGroups) {
+                        // Skip default security group
+                        if (sg.GroupName === 'default') {
+                            continue;
+                        }
+
+                        try {
+                            await ec2Client.send(new DeleteSecurityGroupCommand({
+                                GroupId: sg.GroupId
+                            }));
+                            console.log(`  • Deleted security group: ${sg.GroupId}`);
+                        } catch (err) {
+                            console.log(`  • Failed to delete security group ${sg.GroupId}, may have dependencies: ${err.message}`);
+                        }
+                    }
+                }
+
+                // 5. Finally delete the VPC
+                await ec2Client.send(new DeleteVpcCommand({
+                    VpcId: vpcId
+                }));
+                console.log(`• Successfully deleted VPC: ${vpcId}`);
+            }
+        } else {
+            console.log("No VPCs found to delete.");
+        }
+    } catch (error) {
+        console.error("Error during VPC deletion:", error);
+    }
+    // --- 5. Delete IAM Role ---
+    console.log("\nStep 5: Deleting IAM Role...");
 
     // Get name of managed tag
     const listCommand = new ListRolesCommand();
@@ -266,6 +411,34 @@ async function destroyUniverse() {
                     }));
                     console.log(`• Deleted inline policy ${policyName} from role ${roleName}`);
                 }
+            }
+
+            // List and delete instance profiles
+            const listInstanceProfieCommand = new ListInstanceProfilesCommand();
+            const roleInstanceProfileResponse = await iamClient.send(listInstanceProfieCommand);
+
+            if (roleInstanceProfileResponse) {
+                // Get the matching profile instance for the role
+                let profileName;
+                for (const pN of roleInstanceProfileResponse.InstanceProfiles){
+                    if (pN.InstanceProfileName == roleName){
+                        profileName = roleName
+                        break;
+                    }
+                }
+                try{
+                    await iamClient.send(new RemoveRoleFromInstanceProfileCommand({
+                        RoleName: roleName,
+                        InstanceProfileName: profileName
+                    }));
+                    await iamClient.send(new DeleteInstanceProfileCommand({
+                        InstanceProfileName: profileName
+                    }));
+                } catch (e) {
+                    console.error(`Error deleting IAM instance profile ${profileName}:`, e);
+                    console.error("Continuing...");
+                }
+                console.log(`• Deleted instance profile ${profileName} from role ${roleName}`);
             }
 
             // Delete the role
