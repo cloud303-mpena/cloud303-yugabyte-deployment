@@ -552,9 +552,14 @@ export async function createVpc(
 ): Promise<string | undefined> {
   const ec2Client = new EC2Client({ region: region});
 
+  const vpcTagSpec: TagSpecification = {
+    ResourceType: "vpc",
+    Tags: [managedTag],
+  }
   try {
     const createVpcCommand = new CreateVpcCommand({
       CidrBlock: cidrBlock,
+      TagSpecifications: [vpcTagSpec],
     });
     const vpcResult = await ec2Client.send(createVpcCommand);
 
@@ -750,10 +755,16 @@ export async function createInternetGatewayAndRouteTable(
   // Initialize the EC2 client
   const ec2Client = new EC2Client({region: region});
 
+  const igwTagSpec: TagSpecification = {
+    ResourceType: "internet-gateway",
+    Tags: [managedTag],
+  }
   try {
     // Step 1: Create Internet Gateway
     const createIgwResponse = await ec2Client.send(
-      new CreateInternetGatewayCommand({})
+      new CreateInternetGatewayCommand({
+        TagSpecifications: [igwTagSpec]
+      })
     );
 
     const internetGatewayId =
@@ -771,10 +782,15 @@ export async function createInternetGatewayAndRouteTable(
       })
     );
 
+    const routeTableTagSpec: TagSpecification = {
+      ResourceType: "route-table",
+      Tags: [managedTag],
+    }
     // Step 4: Create Public Route Table
     const createRouteTableResponse = await ec2Client.send(
       new CreateRouteTableCommand({
         VpcId: vpcId,
+        TagSpecifications: [routeTableTagSpec]
       })
     );
 
