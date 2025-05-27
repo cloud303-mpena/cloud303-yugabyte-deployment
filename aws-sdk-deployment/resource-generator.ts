@@ -892,9 +892,14 @@ export async function createNetworkInterfaceWithPublicIP(
     }
 
     // Step 2: Allocate an Elastic IP
+    const ipTagSpec: TagSpecification = {
+      ResourceType: "elastic-ip",
+      Tags: [managedTag],
+    }
     const allocateResponse = await ec2Client.send(
       new AllocateAddressCommand({
         Domain: "vpc",
+        TagSpecifications: [ipTagSpec],
       })
     );
 
