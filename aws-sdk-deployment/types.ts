@@ -7,5 +7,7 @@ export interface YugabyteParams {
     LatestAmiId: string;
     SshUser: string;
     DeploymentType: string;
+    ManagementTagKey: string;
+    ManagementTagValue: string;
     Region: string;
   }

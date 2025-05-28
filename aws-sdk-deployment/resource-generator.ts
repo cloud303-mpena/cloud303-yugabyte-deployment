@@ -23,7 +23,8 @@ import {
   IamInstanceProfileSpecification,
   AssociateIamInstanceProfileCommand,
   DescribeAvailabilityZonesCommand,
-  CreateKeyPairCommand,
+  CreateKeyPairCommand, Tag,
+  TagSpecification,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -55,6 +56,8 @@ const DEFAULTS: YugabyteParams = {
     "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
   SshUser: "ubuntu",
   DeploymentType: "Multi-AZ",
+  ManagementTagKey: "c303-yugabyte-managed",
+  ManagementTagValue: "true",
   Region: "us-east-1",
 };
 
@@ -126,10 +129,31 @@ export async function promptForParams(): Promise<YugabyteParams> {
       message: "Region",
       default: DEFAULTS.Region,
     },
+    {
+      type: "input",
+      name: "ManagementTagKey",
+      message: "ManagementTagKey",
+      default: DEFAULTS.ManagementTagKey,
+    },
+    {
+      type: "input",
+      name: "ManagementTagValue",
+      message: "ManagementTagValue",
+      default: DEFAULTS.ManagementTagValue,
+    },
   ]);
 
   return answers as YugabyteParams;
 }
+
+// Refactored to params
+const managedTag = { Key: "c303-yugabyte-managed", Value: "true", };
+
+const managedTagType: Tag = {
+  Key: "c303-yugabyte-managed",
+  Value: "true",
+}
+
 /**
  * Initializes EC2 client in the right region
 * @param {region} - region to initialize the client in
@@ -152,7 +176,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
  * @returns {Promise<string>} A promise that resolves to the ARN of the created instance profile
  * @throws {Error} If any of the IAM operations fail during role or profile creation
  */
-export async function createSSMInstanceRole(roleName: string): Promise<string> {
+export async function createSSMInstanceRole(roleName: string, managedTag: {Key: string, Value: string}): Promise<string> {
   const iamClient = new IAMClient();
   //Trust policy for EC2
   const assumeRolePolicyDocument = JSON.stringify({
@@ -173,6 +197,7 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
       new CreateRoleCommand({
         RoleName: roleName,
         AssumeRolePolicyDocument: assumeRolePolicyDocument,
+        Tags: [managedTag],
       })
     );
 
@@ -188,6 +213,7 @@ export async function createSSMInstanceRole(roleName: string): Promise<string> {
     await iamClient.send(
       new CreateInstanceProfileCommand({
         InstanceProfileName: roleName,
+        Tags: [managedTag],
       })
     );
 
@@ -270,6 +296,11 @@ export async function createEC2Instance(
       masterNetIntIds.map((id) => getPrimaryPrivateIpAddress(region, id, false))
     );
 
+    const ec2TagSpec: TagSpecification = {
+      ResourceType: "instance",
+      Tags: [managedTag],
+    }
+
     const instanceParams = {
       Name: name,
       ImageId: await getAmiIdFromSSM(imageId),
@@ -294,6 +325,7 @@ export async function createEC2Instance(
           nodePrivateIp
         )
       ).toString("base64"),
+      TagSpecifications: [ec2TagSpec]
     };
 
     // Create the instance
@@ -534,12 +566,18 @@ export async function waitForInstanceRunning(
 export async function createVpc(
   region: string,
   cidrBlock: string
+
 ): Promise<string | undefined> {
   const ec2Client = new EC2Client({ region: region});
 
+  const vpcTagSpec: TagSpecification = {
+    ResourceType: "vpc",
+    Tags: [managedTag],
+  }
   try {
     const createVpcCommand = new CreateVpcCommand({
       CidrBlock: cidrBlock,
+      TagSpecifications: [vpcTagSpec],
     });
     const vpcResult = await ec2Client.send(createVpcCommand);
 
@@ -569,12 +607,18 @@ export async function createSubnets(
   const ec2Client = new EC2Client({ region: region});
   const subnetIds: string[] = [];
   console.log("Creating subnets...");
-  
+
+  const subnetTagSpec: TagSpecification = {
+    ResourceType: "subnet",
+    Tags: [managedTag],
+  }
+
   for (const [cidr, az] of Object.entries(cidrToAZ)) {
     const subnetCommand = new CreateSubnetCommand({
       VpcId: vpcId,
       AvailabilityZone: az,
       CidrBlock: cidr,
+      TagSpecifications: [subnetTagSpec]
     });
     const result = await ec2Client.send(subnetCommand);
     const subnetId = result.Subnet?.SubnetId;
@@ -617,6 +661,7 @@ export async function createYugaByteSecurityGroup(
             Key: "Name",
             Value: "YugaByteSecurityGroup",
           },
+          managedTag,
         ],
       },
     ],
@@ -728,10 +773,16 @@ export async function createInternetGatewayAndRouteTable(
   // Initialize the EC2 client
   const ec2Client = new EC2Client({region: region});
 
+  const igwTagSpec: TagSpecification = {
+    ResourceType: "internet-gateway",
+    Tags: [managedTag],
+  }
   try {
     // Step 1: Create Internet Gateway
     const createIgwResponse = await ec2Client.send(
-      new CreateInternetGatewayCommand({})
+      new CreateInternetGatewayCommand({
+        TagSpecifications: [igwTagSpec]
+      })
     );
 
     const internetGatewayId =
@@ -749,10 +800,15 @@ export async function createInternetGatewayAndRouteTable(
       })
     );
 
+    const routeTableTagSpec: TagSpecification = {
+      ResourceType: "route-table",
+      Tags: [managedTag],
+    }
     // Step 4: Create Public Route Table
     const createRouteTableResponse = await ec2Client.send(
       new CreateRouteTableCommand({
         VpcId: vpcId,
+        TagSpecifications: [routeTableTagSpec]
       })
     );
 
@@ -848,12 +904,18 @@ export async function createNetworkInterfaceWithPublicIP(
 ): Promise<{ networkInterfaceId: string; publicIp: string }> {
   const ec2Client = new EC2Client({region: region});
 
+  const netTagSpec: TagSpecification = {
+    ResourceType: "network-interface",
+    Tags: [managedTag],
+  }
+
   try {
     // Step 1: Create the network interface
     const createResponse = await ec2Client.send(
       new CreateNetworkInterfaceCommand({
         SubnetId: subnetId,
         Groups: [securityGroupId],
+        TagSpecifications: [netTagSpec],
       })
     );
 
@@ -864,9 +926,14 @@ export async function createNetworkInterfaceWithPublicIP(
     }
 
     // Step 2: Allocate an Elastic IP
+    const ipTagSpec: TagSpecification = {
+      ResourceType: "elastic-ip",
+      Tags: [managedTag],
+    }
     const allocateResponse = await ec2Client.send(
       new AllocateAddressCommand({
         Domain: "vpc",
+        TagSpecifications: [ipTagSpec],
       })
     );
 
