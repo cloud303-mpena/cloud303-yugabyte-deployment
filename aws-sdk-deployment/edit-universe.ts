@@ -36,6 +36,24 @@ import {
 } from "@aws-sdk/client-iam";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import {YugabyteParams} from "./types";
+import * as resGen from "./resource-generator";
+import inquirer from "inquirer";
+
+const DEFAULTS: YugabyteParams = {
+    DBVersion: "2024.2.2.1-b190",
+    RFFactor: 3,
+    NumberOfNodes: 3,
+    KeyName: "",
+    InstanceType: "t3.medium",
+    LatestAmiId:
+        "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
+    SshUser: "ubuntu",
+    DeploymentType: "Multi-AZ",
+    ManagementTagKey: "c303-yugabyte-managed",
+    ManagementTagValue: "true",
+    Region: "us-east-1",
+};
 
 const managedTag = { Key: "c303-yugabyte-managed", Value: "true" };
 const managedTagType: Tag = {
@@ -43,7 +61,36 @@ const managedTagType: Tag = {
     Value: "true",
 }
 
+const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
+/**
+ * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
+ *
+ * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
+ */
+export async function promptForParams(): Promise<YugabyteParams> {
+    const answers = await inquirer.prompt([
+        {
+            type: "input",
+            name: "Region",
+            message: "Region",
+            default: DEFAULTS.Region,
+        },
+        {
+            type: "input",
+            name: "ManagementTagKey",
+            message: "ManagementTagKey",
+            default: DEFAULTS.ManagementTagKey,
+        },
+        {
+            type: "input",
+            name: "ManagementTagValue",
+            message: "ManagementTagValue",
+            default: DEFAULTS.ManagementTagValue,
+        },
+    ]);
 
+    return answers as YugabyteParams;
+}
 /**
  * Delete resources in the specified order:
  * 1. Terminate EC2 Instances
@@ -51,9 +98,9 @@ const managedTagType: Tag = {
  * 3. Release Elastic IPs
  * 4. Delete Role
  */
-async function destroyUniverse() {
-    const ec2Client = new EC2Client({ region: "us-east-1" });
-    const iamClient = new IAMClient({ region: "us-east-1" });
+async function destroyUniverse(region: string, managedTag: {Key: string, Value: string}) {
+    const ec2Client = new EC2Client({ region: region });
+    const iamClient = new IAMClient({ region: region });
 
     // --- 1. Terminate EC2 instances ---
     console.log("Step 1: Terminating EC2 instances...");
@@ -62,8 +109,8 @@ async function destroyUniverse() {
     const taggedInput = {
         Filters: [
             {
-                Name: "tag:c303-yugabyte-managed",
-                Values: ["true"],
+                Name: `tag:${managedTag.Key}`,
+                Values: [managedTag.Value],
             },
         ],
     };
@@ -140,8 +187,8 @@ async function destroyUniverse() {
         const networkInterfacesCommand = new DescribeNetworkInterfacesCommand({
             Filters: [
                 {
-                    Name: "tag:c303-yugabyte-managed",
-                    Values: ["true"],
+                    Name: `tag:${managedTag.Key}`,
+                    Values: [managedTag.Value],
                 },
             ],
         });
@@ -184,8 +231,8 @@ async function destroyUniverse() {
         const describeAddressesCommand = new DescribeAddressesCommand({
             Filters: [
                 {
-                    Name: "tag:c303-yugabyte-managed",
-                    Values: ["true"],
+                    Name: `tag:${managedTag.Key}`,
+                    Values: [managedTag.Value],
                 },
             ],
         });
@@ -221,8 +268,8 @@ async function destroyUniverse() {
         const describeVpcsCommand = new DescribeVpcsCommand({
             Filters: [
                 {
-                    Name: "tag:c303-yugabyte-managed",
-                    Values: ["true"],
+                    Name: `tag:${managedTag.Key}`,
+                    Values: [managedTag.Value],
                 },
             ],
         });
@@ -452,8 +499,17 @@ async function destroyUniverse() {
     console.log("\nUniverse destruction process completed.");
 }
 
-// Execute the resource cleanup
-destroyUniverse().catch(err => {
-    console.error("Fatal error during universe destruction:", err);
-    process.exit(1);
-});
+
+async function editUniverse() {
+    //Prompts user for paramaters
+    const params: YugabyteParams = await resGen.promptForParams();
+    // Execute the resource cleanup
+    // Create Tag from params
+    const managedTag = { Key: params.ManagementTagKey, Value: params.ManagementTagValue };
+    destroyUniverse(params.Region, managedTag).catch(err => {
+        console.error("Fatal error during universe destruction:", err);
+        process.exit(1);
+    });
+}
+
+editUniverse();

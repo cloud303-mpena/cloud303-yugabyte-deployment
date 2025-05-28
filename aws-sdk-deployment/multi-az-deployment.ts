@@ -5,6 +5,9 @@ async function deployMultiAZ(): Promise<string> {
   //Prompts user for paramaters
   const params: YugabyteParams = await resGen.promptForParams();
 
+  // Create Tag from params
+  const managedTag = { Key: params.ManagementTagKey, Value: params.ManagementTagValue };
+
   //Creates key pair if it doesn't already exist
   await resGen.createAndSaveKeyPair(params.KeyName, params.Region)
 
@@ -46,7 +49,8 @@ async function deployMultiAZ(): Promise<string> {
   }
 
   const instanceProfileArn = await resGen.createSSMInstanceRole(
-    "SSMPermissionRole"
+    "SSMPermissionRole",
+      managedTag
   );
 
   const azs = Object.values(cidrToAZ);

@@ -46,12 +46,6 @@ import { get } from "http";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
-const managedTag = { Key: "c303-yugabyte-managed", Value: "true", };
-
-const managedTagType: Tag = {
-  Key: "c303-yugabyte-managed",
-  Value: "true",
-}
 const DEFAULTS: YugabyteParams = {
   DBVersion: "2024.2.2.1-b190",
   RFFactor: 3,
@@ -62,6 +56,8 @@ const DEFAULTS: YugabyteParams = {
     "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
   SshUser: "ubuntu",
   DeploymentType: "Multi-AZ",
+  ManagementTagKey: "c303-yugabyte-managed",
+  ManagementTagValue: "true",
   Region: "us-east-1",
 };
 
@@ -133,10 +129,31 @@ export async function promptForParams(): Promise<YugabyteParams> {
       message: "Region",
       default: DEFAULTS.Region,
     },
+    {
+      type: "input",
+      name: "ManagementTagKey",
+      message: "ManagementTagKey",
+      default: DEFAULTS.ManagementTagKey,
+    },
+    {
+      type: "input",
+      name: "ManagementTagValue",
+      message: "ManagementTagValue",
+      default: DEFAULTS.ManagementTagValue,
+    },
   ]);
 
   return answers as YugabyteParams;
 }
+
+// Refactored to params
+const managedTag = { Key: "c303-yugabyte-managed", Value: "true", };
+
+const managedTagType: Tag = {
+  Key: "c303-yugabyte-managed",
+  Value: "true",
+}
+
 /**
  * Initializes EC2 client in the right region
 * @param {region} - region to initialize the client in
@@ -159,7 +176,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
  * @returns {Promise<string>} A promise that resolves to the ARN of the created instance profile
  * @throws {Error} If any of the IAM operations fail during role or profile creation
  */
-export async function createSSMInstanceRole(roleName: string): Promise<string> {
+export async function createSSMInstanceRole(roleName: string, managedTag: {Key: string, Value: string}): Promise<string> {
   const iamClient = new IAMClient();
   //Trust policy for EC2
   const assumeRolePolicyDocument = JSON.stringify({
@@ -549,6 +566,7 @@ export async function waitForInstanceRunning(
 export async function createVpc(
   region: string,
   cidrBlock: string
+
 ): Promise<string | undefined> {
   const ec2Client = new EC2Client({ region: region});
 
