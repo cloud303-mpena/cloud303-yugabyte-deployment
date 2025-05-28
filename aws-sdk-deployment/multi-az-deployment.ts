@@ -1,9 +1,11 @@
+import { Tag } from "@aws-sdk/client-ec2";
 import * as resGen from "./resource-generator";
 import { YugabyteParams } from "./types";
+import inquirer from "inquirer";
 
 async function deployMultiAZ(): Promise<string> {
   //Prompts user for paramaters
-  const params: YugabyteParams = await resGen.promptForYBParams();
+  const params: YugabyteParams = await promptForYBParams();
 
   // Create Tag from params
   const managedTag = {
@@ -133,6 +135,113 @@ async function deployMultiAZ(): Promise<string> {
   const firstInstance = await ec2InstanceInfo[0];
   console.log(`View YB UI at: http://${firstInstance.publicIp}:7000`);
   return "";
+}
+
+const DEFAULTS: YugabyteParams = {
+  DBVersion: "2024.2.2.1-b190",
+  RFFactor: 3,
+  NumberOfNodes: 3,
+  KeyName: "",
+  InstanceType: "t3.medium",
+  LatestAmiId:
+    "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
+  SshUser: "ubuntu",
+  DeploymentType: "Multi-AZ",
+  ManagementTagKey: "c303-yugabyte-managed",
+  ManagementTagValue: "true",
+  Region: "us-east-1",
+};
+
+const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
+const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
+
+const managedTag = { Key: "c303-yugabyte-managed", Value: "true" };
+
+const managedTagType: Tag = {
+  Key: "c303-yugabyte-managed",
+  Value: "true",
+};
+/**
+ * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
+ *
+ * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
+ */
+export async function promptForYBParams(): Promise<YugabyteParams> {
+  const answers = await inquirer.prompt([
+    {
+      type: "input",
+      name: "DBVersion",
+      message: `DBVersion`,
+      default: DEFAULTS.DBVersion,
+    },
+    {
+      type: "input",
+      name: "NumberOfNodes",
+      message: `Number of Nodes`,
+      default: String(DEFAULTS.NumberOfNodes),
+    },
+    {
+      type: "input",
+      name: "RFFactor",
+      message: `RFFactor`,
+      default: String(DEFAULTS.RFFactor),
+      //RF must be odd
+      validate: (input) => parseInt(input, 10) % 2 == 1,
+    },
+    {
+      type: "input",
+      name: "KeyName",
+      message: "KeyName",
+      default: "YugabyteKey",
+      validate: (input) => (input ? true : "KeyName is required."),
+    },
+    {
+      type: "list",
+      name: "InstanceType",
+      message: "Select Instance Type",
+      choices: INSTANCE_TYPES,
+      default: DEFAULTS.InstanceType,
+    },
+    {
+      type: "input",
+      name: "LatestAmiId",
+      message: "LatestAmiId",
+      default: DEFAULTS.LatestAmiId,
+    },
+    {
+      type: "input",
+      name: "SshUser",
+      message: "SshUser",
+      default: DEFAULTS.SshUser,
+    },
+    {
+      type: "list",
+      name: "DeploymentType",
+      message: "Select Deployment Type",
+      choices: DEPLOYMENT_TYPES,
+      default: DEFAULTS.DeploymentType,
+    },
+    {
+      type: "input",
+      name: "Region",
+      message: "Region",
+      default: DEFAULTS.Region,
+    },
+    {
+      type: "input",
+      name: "ManagementTagKey",
+      message: "ManagementTagKey",
+      default: DEFAULTS.ManagementTagKey,
+    },
+    {
+      type: "input",
+      name: "ManagementTagValue",
+      message: "ManagementTagValue",
+      default: DEFAULTS.ManagementTagValue,
+    },
+  ]);
+
+  return answers as YugabyteParams;
 }
 
 deployMultiAZ();

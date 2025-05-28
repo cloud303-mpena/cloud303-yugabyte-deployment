@@ -48,117 +48,12 @@ import { get } from "http";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
-const DEFAULTS: YugabyteParams = {
-  DBVersion: "2024.2.2.1-b190",
-  RFFactor: 3,
-  NumberOfNodes: 3,
-  KeyName: "",
-  InstanceType: "t3.medium",
-  LatestAmiId:
-    "/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id",
-  SshUser: "ubuntu",
-  DeploymentType: "Multi-AZ",
-  ManagementTagKey: "c303-yugabyte-managed",
-  ManagementTagValue: "true",
-  Region: "us-east-1",
-};
-
-const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
-const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
-
 const managedTag = { Key: "c303-yugabyte-managed", Value: "true" };
 
 const managedTagType: Tag = {
   Key: "c303-yugabyte-managed",
   Value: "true",
 };
-
-/**
- * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
- *
- * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
- */
-export async function promptForYBParams(): Promise<YugabyteParams> {
-  const answers = await inquirer.prompt([
-    {
-      type: "input",
-      name: "DBVersion",
-      message: `DBVersion`,
-      default: DEFAULTS.DBVersion,
-    },
-    {
-      type: "input",
-      name: "NumberOfNodes",
-      message: `Number of Nodes`,
-      default: String(DEFAULTS.NumberOfNodes),
-    },
-    {
-      type: "input",
-      name: "RFFactor",
-      message: `RFFactor`,
-      default: String(DEFAULTS.RFFactor),
-      //RF must be odd
-      validate: (input) => parseInt(input, 10) % 2 == 1,
-    },
-    {
-      type: "input",
-      name: "KeyName",
-      message: "KeyName",
-      default: "YugabyteKey",
-      validate: (input) => (input ? true : "KeyName is required."),
-    },
-    {
-      type: "list",
-      name: "InstanceType",
-      message: "Select Instance Type",
-      choices: INSTANCE_TYPES,
-      default: DEFAULTS.InstanceType,
-    },
-    {
-      type: "input",
-      name: "LatestAmiId",
-      message: "LatestAmiId",
-      default: DEFAULTS.LatestAmiId,
-    },
-    {
-      type: "input",
-      name: "SshUser",
-      message: "SshUser",
-      default: DEFAULTS.SshUser,
-    },
-    {
-      type: "list",
-      name: "DeploymentType",
-      message: "Select Deployment Type",
-      choices: DEPLOYMENT_TYPES,
-      default: DEFAULTS.DeploymentType,
-    },
-    {
-      type: "input",
-      name: "Region",
-      message: "Region",
-      default: DEFAULTS.Region,
-    },
-    {
-      type: "input",
-      name: "ManagementTagKey",
-      message: "ManagementTagKey",
-      default: DEFAULTS.ManagementTagKey,
-    },
-    {
-      type: "input",
-      name: "ManagementTagValue",
-      message: "ManagementTagValue",
-      default: DEFAULTS.ManagementTagValue,
-    },
-  ]);
-
-  return answers as YugabyteParams;
-}
-
-
-
-// Refactored to params
 
 /**
  * Initializes EC2 client in the right region
@@ -288,7 +183,7 @@ export async function createEC2Instance(
   try {
     const blockDeviceMappings: BlockDeviceMapping[] = [
       {
-        DeviceName: "/dev/xvda",
+        DeviceName: "/dev/sda1",
         Ebs: {
           VolumeSize: 50,
           DeleteOnTermination: true,
@@ -1168,8 +1063,8 @@ export async function createAndSaveKeyPair(
 }
 
 const PLACEMENTDEFAULTS = {
-    NumRegions: 2,
-    DefaultRegions: ['us-east-1', 'us-west-2']
+  NumRegions: 2,
+  DefaultRegions: ["us-east-1", "us-west-2"],
 };
 
 /**
@@ -1178,22 +1073,24 @@ const PLACEMENTDEFAULTS = {
  * @returns True if valid, error message if invalid
  */
 async function validateRegion(region: string): Promise<boolean | string> {
-    try {
-        const ec2Client = new EC2Client({ region: 'us-east-1' });
-        const command = new DescribeRegionsCommand({
-            RegionNames: [region],
-            AllRegions: false
-        });
-        
-        const response = await ec2Client.send(command);
-        if (response.Regions && response.Regions.length > 0) {
-            return true;
-        } else {
-            return `Region '${region}' does not exist in AWS`;
-        }
-    } catch (error) {
-        return `Invalid region: ${error instanceof Error ? error.message : String(error)}`;
+  try {
+    const ec2Client = new EC2Client({ region: "us-east-1" });
+    const command = new DescribeRegionsCommand({
+      RegionNames: [region],
+      AllRegions: false,
+    });
+
+    const response = await ec2Client.send(command);
+    if (response.Regions && response.Regions.length > 0) {
+      return true;
+    } else {
+      return `Region '${region}' does not exist in AWS`;
     }
+  } catch (error) {
+    return `Invalid region: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  }
 }
 
 /**
@@ -1216,7 +1113,7 @@ async function validateRegion(region: string): Promise<boolean | string> {
 //                 }
 //             ]
 //         });
-        
+
 //         const response = await ec2Client.send(command);
 //         if (response.AvailabilityZones && response.AvailabilityZones.length > 0) {
 //             return response.AvailabilityZones
@@ -1235,70 +1132,74 @@ async function validateRegion(region: string): Promise<boolean | string> {
  * @returns Promise resolving to PlacementInfo
  */
 export async function promptForPlacementInfo(): Promise<PlacementInfo> {
-    // Step 1: Ask for number of regions
-    const numRegionsAnswer = await inquirer.prompt([
-        {
-            type: "input",
-            name: "NumRegions",
-            message: "Enter the number of regions:",
-            default: String(PLACEMENTDEFAULTS.NumRegions),
-            validate: (input) => {
-                const num = parseInt(input, 10);
-                return !isNaN(num) && num > 0 ? true : "Please enter a valid positive number";
-            }
-        }
+  // Step 1: Ask for number of regions
+  const numRegionsAnswer = await inquirer.prompt([
+    {
+      type: "input",
+      name: "NumRegions",
+      message: "Enter the number of regions:",
+      default: String(PLACEMENTDEFAULTS.NumRegions),
+      validate: (input) => {
+        const num = parseInt(input, 10);
+        return !isNaN(num) && num > 0
+          ? true
+          : "Please enter a valid positive number";
+      },
+    },
+  ]);
+
+  const numRegions = parseInt(numRegionsAnswer.NumRegions, 10);
+  const regions: string[] = [];
+
+  // Step 2: Collect and validate each region
+  for (let i = 0; i < numRegions; i++) {
+    const regionAnswer = await inquirer.prompt([
+      {
+        type: "input",
+        name: "region",
+        message: `Enter region ${i + 1} name (e.g., us-west-2):`,
+        default: PLACEMENTDEFAULTS.DefaultRegions[i] || "",
+        validate: validateRegion,
+      },
     ]);
-    
-    const numRegions = parseInt(numRegionsAnswer.NumRegions, 10);
-    const regions: string[] = [];
-    
-    // Step 2: Collect and validate each region
-    for (let i = 0; i < numRegions; i++) {
-        const regionAnswer = await inquirer.prompt([
-            {
-                type: "input",
-                name: "region",
-                message: `Enter region ${i + 1} name (e.g., us-west-2):`,
-                default: PLACEMENTDEFAULTS.DefaultRegions[i] || '',
-                validate: validateRegion
-            }
-        ]);
-        
-        regions.push(regionAnswer.region);
+
+    regions.push(regionAnswer.region);
+  }
+
+  // Step 3: Collect AZs for each region
+  const azs: string[][] = [];
+
+  for (let i = 0; i < regions.length; i++) {
+    const region = regions[i];
+    const availableAZs = await getAvailableAZs(region);
+
+    if (availableAZs.length === 0) {
+      throw new Error(
+        `Could not retrieve availability zones for region ${region}`
+      );
     }
-    
-    // Step 3: Collect AZs for each region
-    const azs: string[][] = [];
-    
-    for (let i = 0; i < regions.length; i++) {
-        const region = regions[i];
-        const availableAZs = await getAvailableAZs(region);
-        
-        if (availableAZs.length === 0) {
-            throw new Error(`Could not retrieve availability zones for region ${region}`);
-        }
-        
-        // Show available AZs for this region
-        console.log(`\nAvailable AZs in ${region}:`, availableAZs.join(", "));
-        
-        const azSelectionAnswer = await inquirer.prompt([
-            {
-                type: "checkbox",
-                name: "selectedAZs",
-                message: `Select availability zones for ${region}:`,
-                choices: availableAZs,
-                default: availableAZs.slice(0, Math.min(3, availableAZs.length)),
-                validate: (input) => 
-                    input.length > 0 ? true : "Select at least one availability zone"
-            }
-        ]);
-        
-        azs.push(azSelectionAnswer.selectedAZs);
-    }
-    
-    return {
-        NumRegions: numRegions,
-        Regions: regions,
-        AZs: azs
-    };
+
+    // Show available AZs for this region
+    console.log(`\nAvailable AZs in ${region}:`, availableAZs.join(", "));
+
+    const azSelectionAnswer = await inquirer.prompt([
+      {
+        type: "checkbox",
+        name: "selectedAZs",
+        message: `Select availability zones for ${region}:`,
+        choices: availableAZs,
+        default: availableAZs.slice(0, Math.min(3, availableAZs.length)),
+        validate: (input) =>
+          input.length > 0 ? true : "Select at least one availability zone",
+      },
+    ]);
+
+    azs.push(azSelectionAnswer.selectedAZs);
+  }
+
+  return {
+    NumRegions: numRegions,
+    Regions: regions,
+    AZs: azs,
+  };
 }
