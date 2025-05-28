@@ -10,4 +10,9 @@ export interface YugabyteParams {
     ManagementTagKey: string;
     ManagementTagValue: string;
     Region: string;
-  }
+}
+export interface PlacementInfo {
+    NumRegions: number;
+    Regions: string[];
+    AZs: string[][];
+}

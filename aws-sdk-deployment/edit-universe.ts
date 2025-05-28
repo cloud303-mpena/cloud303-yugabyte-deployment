@@ -502,7 +502,7 @@ async function destroyUniverse(region: string, managedTag: {Key: string, Value: 
 
 async function editUniverse() {
     //Prompts user for paramaters
-    const params: YugabyteParams = await resGen.promptForParams();
+    const params: YugabyteParams = await resGen.promptForYBParams();
     // Execute the resource cleanup
     // Create Tag from params
     const managedTag = { Key: params.ManagementTagKey, Value: params.ManagementTagValue };

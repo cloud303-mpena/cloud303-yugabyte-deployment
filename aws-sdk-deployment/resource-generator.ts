@@ -23,8 +23,10 @@ import {
   IamInstanceProfileSpecification,
   AssociateIamInstanceProfileCommand,
   DescribeAvailabilityZonesCommand,
-  CreateKeyPairCommand, Tag,
+  CreateKeyPairCommand,
+  Tag,
   TagSpecification,
+  DescribeRegionsCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -33,7 +35,7 @@ import {
 } from "@aws-sdk/client-ssm";
 
 import inquirer from "inquirer";
-import { YugabyteParams } from "./types";
+import { PlacementInfo, YugabyteParams } from "./types";
 import {
   IAMClient,
   CreateRoleCommand,
@@ -63,12 +65,20 @@ const DEFAULTS: YugabyteParams = {
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
 const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
+
+const managedTag = { Key: "c303-yugabyte-managed", Value: "true" };
+
+const managedTagType: Tag = {
+  Key: "c303-yugabyte-managed",
+  Value: "true",
+};
+
 /**
  * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
  *
  * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
  */
-export async function promptForParams(): Promise<YugabyteParams> {
+export async function promptForYBParams(): Promise<YugabyteParams> {
   const answers = await inquirer.prompt([
     {
       type: "input",
@@ -88,7 +98,7 @@ export async function promptForParams(): Promise<YugabyteParams> {
       message: `RFFactor`,
       default: String(DEFAULTS.RFFactor),
       //RF must be odd
-      validate: (input) => (parseInt(input, 10) % 2 == 1)
+      validate: (input) => parseInt(input, 10) % 2 == 1,
     },
     {
       type: "input",
@@ -146,19 +156,15 @@ export async function promptForParams(): Promise<YugabyteParams> {
   return answers as YugabyteParams;
 }
 
-// Refactored to params
-const managedTag = { Key: "c303-yugabyte-managed", Value: "true", };
 
-const managedTagType: Tag = {
-  Key: "c303-yugabyte-managed",
-  Value: "true",
-}
+
+// Refactored to params
 
 /**
  * Initializes EC2 client in the right region
-* @param {region} - region to initialize the client in
-* 
-*/
+ * @param {region} - region to initialize the client in
+ *
+ */
 // export async function initEC2Client(region: string) {
 //   ec2Client = new EC2Client({region: region})
 // }
@@ -176,7 +182,10 @@ const managedTagType: Tag = {
  * @returns {Promise<string>} A promise that resolves to the ARN of the created instance profile
  * @throws {Error} If any of the IAM operations fail during role or profile creation
  */
-export async function createSSMInstanceRole(roleName: string, managedTag: {Key: string, Value: string}): Promise<string> {
+export async function createSSMInstanceRole(
+  roleName: string,
+  managedTag: { Key: string; Value: string }
+): Promise<string> {
   const iamClient = new IAMClient();
   //Trust policy for EC2
   const assumeRolePolicyDocument = JSON.stringify({
@@ -224,26 +233,24 @@ export async function createSSMInstanceRole(roleName: string, managedTag: {Key: 
         RoleName: roleName,
       })
     );
-
   } catch (error) {
     //TODO: change to make sure the error is that it already exists
-      if ((error as any).name === "EntityAlreadyExistsException"){
-
-      }
+    if ((error as any).name === "EntityAlreadyExistsException") {
+    }
   }
-      // Get the instance profile to retrieve its ARN
-    const getInstanceProfileResponse = await iamClient.send(
-      new GetInstanceProfileCommand({
-        InstanceProfileName: roleName,
-      })
-    );
+  // Get the instance profile to retrieve its ARN
+  const getInstanceProfileResponse = await iamClient.send(
+    new GetInstanceProfileCommand({
+      InstanceProfileName: roleName,
+    })
+  );
 
-    const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
-    console.log(
-      `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
-    );
+  const instanceProfileArn = getInstanceProfileResponse.InstanceProfile?.Arn;
+  console.log(
+    `Created EC2 IAM role and instance profile: ${roleName} with ARN: ${instanceProfileArn}`
+  );
 
-    return instanceProfileArn || "";
+  return instanceProfileArn || "";
 }
 
 /**
@@ -299,7 +306,7 @@ export async function createEC2Instance(
     const ec2TagSpec: TagSpecification = {
       ResourceType: "instance",
       Tags: [managedTag],
-    }
+    };
 
     const instanceParams = {
       Name: name,
@@ -325,7 +332,7 @@ export async function createEC2Instance(
           nodePrivateIp
         )
       ).toString("base64"),
-      TagSpecifications: [ec2TagSpec]
+      TagSpecifications: [ec2TagSpec],
     };
 
     // Create the instance
@@ -348,8 +355,13 @@ export async function createEC2Instance(
     if (!instanceId) {
       throw new Error("Instance ID is undefined.");
     }
-    const publicIp = await ec2Client.send(new DescribeNetworkInterfacesCommand({ NetworkInterfaceIds: [netIntId] }))
-  .then(res => res.NetworkInterfaces?.[0]?.Association?.PublicIp);
+    const publicIp = await ec2Client
+      .send(
+        new DescribeNetworkInterfacesCommand({
+          NetworkInterfaceIds: [netIntId],
+        })
+      )
+      .then((res) => res.NetworkInterfaces?.[0]?.Association?.PublicIp);
     return {
       instanceId,
       privateIpAddress,
@@ -379,7 +391,7 @@ export async function associateInstanceProfileWithEc2(
   console.log(
     `Associating instance ${instanceId} with instance profile ${instanceProfileArn}`
   );
-  const ec2Client = new EC2Client({ region: region});
+  const ec2Client = new EC2Client({ region: region });
   await ec2Client.send(
     new AssociateIamInstanceProfileCommand({
       IamInstanceProfile: {
@@ -408,7 +420,7 @@ export async function getPrimaryPrivateIpAddress(
   doPrint: boolean = true
 ): Promise<string> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({region});
+  const ec2Client = new EC2Client({ region });
 
   try {
     // Request details about the network interface
@@ -566,14 +578,13 @@ export async function waitForInstanceRunning(
 export async function createVpc(
   region: string,
   cidrBlock: string
-
 ): Promise<string | undefined> {
-  const ec2Client = new EC2Client({ region: region});
+  const ec2Client = new EC2Client({ region: region });
 
   const vpcTagSpec: TagSpecification = {
     ResourceType: "vpc",
     Tags: [managedTag],
-  }
+  };
   try {
     const createVpcCommand = new CreateVpcCommand({
       CidrBlock: cidrBlock,
@@ -604,21 +615,21 @@ export async function createSubnets(
   region: string,
   cidrToAZ: { [cidr: string]: string }
 ): Promise<string[]> {
-  const ec2Client = new EC2Client({ region: region});
+  const ec2Client = new EC2Client({ region: region });
   const subnetIds: string[] = [];
   console.log("Creating subnets...");
 
   const subnetTagSpec: TagSpecification = {
     ResourceType: "subnet",
     Tags: [managedTag],
-  }
+  };
 
   for (const [cidr, az] of Object.entries(cidrToAZ)) {
     const subnetCommand = new CreateSubnetCommand({
       VpcId: vpcId,
       AvailabilityZone: az,
       CidrBlock: cidr,
-      TagSpecifications: [subnetTagSpec]
+      TagSpecifications: [subnetTagSpec],
     });
     const result = await ec2Client.send(subnetCommand);
     const subnetId = result.Subnet?.SubnetId;
@@ -646,7 +657,7 @@ export async function createYugaByteSecurityGroup(
   region: string
 ): Promise<string> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({region: region});
+  const ec2Client = new EC2Client({ region: region });
 
   // Create the security group
   const createSgParams = {
@@ -771,17 +782,17 @@ export async function createInternetGatewayAndRouteTable(
   routeTableId: string;
 }> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({region: region});
+  const ec2Client = new EC2Client({ region: region });
 
   const igwTagSpec: TagSpecification = {
     ResourceType: "internet-gateway",
     Tags: [managedTag],
-  }
+  };
   try {
     // Step 1: Create Internet Gateway
     const createIgwResponse = await ec2Client.send(
       new CreateInternetGatewayCommand({
-        TagSpecifications: [igwTagSpec]
+        TagSpecifications: [igwTagSpec],
       })
     );
 
@@ -803,12 +814,12 @@ export async function createInternetGatewayAndRouteTable(
     const routeTableTagSpec: TagSpecification = {
       ResourceType: "route-table",
       Tags: [managedTag],
-    }
+    };
     // Step 4: Create Public Route Table
     const createRouteTableResponse = await ec2Client.send(
       new CreateRouteTableCommand({
         VpcId: vpcId,
-        TagSpecifications: [routeTableTagSpec]
+        TagSpecifications: [routeTableTagSpec],
       })
     );
 
@@ -854,7 +865,7 @@ export async function createSubnetRouteTableAssociations(
   region: string
 ): Promise<AssociateRouteTableCommandOutput[]> {
   // Initialize the EC2 client
-  const ec2Client = new EC2Client({region: region});
+  const ec2Client = new EC2Client({ region: region });
   const associationResponses: AssociateRouteTableCommandOutput[] = [];
 
   try {
@@ -902,12 +913,12 @@ export async function createNetworkInterfaceWithPublicIP(
   securityGroupId: string,
   region: string
 ): Promise<{ networkInterfaceId: string; publicIp: string }> {
-  const ec2Client = new EC2Client({region: region});
+  const ec2Client = new EC2Client({ region: region });
 
   const netTagSpec: TagSpecification = {
     ResourceType: "network-interface",
     Tags: [managedTag],
-  }
+  };
 
   try {
     // Step 1: Create the network interface
@@ -929,7 +940,7 @@ export async function createNetworkInterfaceWithPublicIP(
     const ipTagSpec: TagSpecification = {
       ResourceType: "elastic-ip",
       Tags: [managedTag],
-    }
+    };
     const allocateResponse = await ec2Client.send(
       new AllocateAddressCommand({
         Domain: "vpc",
@@ -1051,7 +1062,7 @@ async function getAmiIdFromSSM(parameterName: string): Promise<string> {
 export async function getAvailableAZs(region: string): Promise<string[]> {
   // Create EC2 client for the specified region
   const ec2Client = new EC2Client({ region });
-  
+
   // Create command to describe AZs
   const command = new DescribeAvailabilityZonesCommand({
     Filters: [
@@ -1065,25 +1076,29 @@ export async function getAvailableAZs(region: string): Promise<string[]> {
       },
     ],
   });
-  
+
   try {
     // Execute the command
     const response = await ec2Client.send(command);
-    
+
     // Extract AZ names from the response
-    const azNames = response.AvailabilityZones?.map(az => az.ZoneName || "") || [];
-    
+    const azNames =
+      response.AvailabilityZones?.map((az) => az.ZoneName || "") || [];
+
     // Filter out any empty strings
-    return azNames.filter(name => name !== "");
+    return azNames.filter((name) => name !== "");
   } catch (error) {
-    console.error(`Error fetching availability zones for region ${region}:`, error);
+    console.error(
+      `Error fetching availability zones for region ${region}:`,
+      error
+    );
     throw error;
   }
 }
 
 /**
  * Builds a network configuration mapping CIDR blocks to Availability Zones.
- * 
+ *
  * Creates a mapping where each CIDR block is associated with an Availability Zone,
  * distributing the specified number of subnets across available AZs in a round-robin fashion.
  * Each subnet uses a /24 CIDR block in the 10.0.x.0/24 range, incrementing for each node.
@@ -1093,28 +1108,31 @@ export async function getAvailableAZs(region: string): Promise<string[]> {
  * @returns {Promise<{[cidr: string]: string}>} Object mapping CIDR blocks to Availability Zones
  * @throws {Error} If no Availability Zones are available for the specified region
  */
-export async function buildNetworkConfig(region: string, numberOfNodes: number): Promise<{ [cidr: string]: string }> {
+export async function buildNetworkConfig(
+  region: string,
+  numberOfNodes: number
+): Promise<{ [cidr: string]: string }> {
   // Get actual AZs available in the region
   const availableAZs = await getAvailableAZs(region);
-  
+
   if (availableAZs.length === 0) {
     throw new Error(`No availability zones found for region: ${region}`);
   }
-  
+
   // Create CIDR to AZ mapping
   const cidrToAZ: { [cidr: string]: string } = {};
-  
+
   for (let i = 0; i < numberOfNodes; i++) {
     // Create CIDR with third octet incrementing for each subnet
     const cidr = `10.0.${i}.0/24`;
-    
+
     // Assign AZ in round-robin fashion
     const azIndex = i % availableAZs.length;
     const az = availableAZs[azIndex];
-    
+
     cidrToAZ[cidr] = az;
   }
-  
+
   return cidrToAZ;
 }
 /**
@@ -1125,12 +1143,17 @@ export async function buildNetworkConfig(region: string, numberOfNodes: number):
  * @returns {Promise<"success" | "fail">} - Returns "success" if the key was created and saved, otherwise "fail".
  *
  */
-export async function createAndSaveKeyPair(keyName: string, region: string): Promise<"success" | "fail"> {
-  console.log(`Creating key pair of name ${keyName} ...`)
-  const ec2Client = new EC2Client({region: region})
+export async function createAndSaveKeyPair(
+  keyName: string,
+  region: string
+): Promise<"success" | "fail"> {
+  console.log(`Creating key pair of name ${keyName} ...`);
+  const ec2Client = new EC2Client({ region: region });
   try {
-    const key = await ec2Client.send(new CreateKeyPairCommand({ KeyName: keyName }));
-    if (!key.KeyMaterial){
+    const key = await ec2Client.send(
+      new CreateKeyPairCommand({ KeyName: keyName })
+    );
+    if (!key.KeyMaterial) {
       throw new Error("No KeyMaterial returned");
     }
     const filePath = resolve(`${keyName}.pem`);
@@ -1142,4 +1165,140 @@ export async function createAndSaveKeyPair(keyName: string, region: string): Pro
     console.error("Error creating key pair:", err);
     return "fail";
   }
+}
+
+const PLACEMENTDEFAULTS = {
+    NumRegions: 2,
+    DefaultRegions: ['us-east-1', 'us-west-2']
+};
+
+/**
+ * Validates if a region exists in AWS
+ * @param region Region name to validate
+ * @returns True if valid, error message if invalid
+ */
+async function validateRegion(region: string): Promise<boolean | string> {
+    try {
+        const ec2Client = new EC2Client({ region: 'us-east-1' });
+        const command = new DescribeRegionsCommand({
+            RegionNames: [region],
+            AllRegions: false
+        });
+        
+        const response = await ec2Client.send(command);
+        if (response.Regions && response.Regions.length > 0) {
+            return true;
+        } else {
+            return `Region '${region}' does not exist in AWS`;
+        }
+    } catch (error) {
+        return `Invalid region: ${error instanceof Error ? error.message : String(error)}`;
+    }
+}
+
+/**
+ * Gets available AZs for a specific region
+ * @param region AWS region
+ * @returns Array of available AZ names
+ */
+// async function getAvailableAZs(region: string): Promise<string[]> {
+//     try {
+//         const ec2Client = new EC2Client({ region });
+//         const command = new DescribeAvailabilityZonesCommand({
+//             Filters: [
+//                 {
+//                     Name: 'region-name',
+//                     Values: [region]
+//                 },
+//                 {
+//                     Name: 'state',
+//                     Values: ['available']
+//                 }
+//             ]
+//         });
+        
+//         const response = await ec2Client.send(command);
+//         if (response.AvailabilityZones && response.AvailabilityZones.length > 0) {
+//             return response.AvailabilityZones
+//                 .filter(az => az.ZoneName)
+//                 .map(az => az.ZoneName!);
+//         }
+//         return [];
+//     } catch (error) {
+//         console.error(`Error getting AZs for region ${region}:`, error);
+//         return [];
+//     }
+// }
+
+/**
+ * Prompts user for PlacementInfo with AWS validations
+ * @returns Promise resolving to PlacementInfo
+ */
+export async function promptForPlacementInfo(): Promise<PlacementInfo> {
+    // Step 1: Ask for number of regions
+    const numRegionsAnswer = await inquirer.prompt([
+        {
+            type: "input",
+            name: "NumRegions",
+            message: "Enter the number of regions:",
+            default: String(PLACEMENTDEFAULTS.NumRegions),
+            validate: (input) => {
+                const num = parseInt(input, 10);
+                return !isNaN(num) && num > 0 ? true : "Please enter a valid positive number";
+            }
+        }
+    ]);
+    
+    const numRegions = parseInt(numRegionsAnswer.NumRegions, 10);
+    const regions: string[] = [];
+    
+    // Step 2: Collect and validate each region
+    for (let i = 0; i < numRegions; i++) {
+        const regionAnswer = await inquirer.prompt([
+            {
+                type: "input",
+                name: "region",
+                message: `Enter region ${i + 1} name (e.g., us-west-2):`,
+                default: PLACEMENTDEFAULTS.DefaultRegions[i] || '',
+                validate: validateRegion
+            }
+        ]);
+        
+        regions.push(regionAnswer.region);
+    }
+    
+    // Step 3: Collect AZs for each region
+    const azs: string[][] = [];
+    
+    for (let i = 0; i < regions.length; i++) {
+        const region = regions[i];
+        const availableAZs = await getAvailableAZs(region);
+        
+        if (availableAZs.length === 0) {
+            throw new Error(`Could not retrieve availability zones for region ${region}`);
+        }
+        
+        // Show available AZs for this region
+        console.log(`\nAvailable AZs in ${region}:`, availableAZs.join(", "));
+        
+        const azSelectionAnswer = await inquirer.prompt([
+            {
+                type: "checkbox",
+                name: "selectedAZs",
+                message: `Select availability zones for ${region}:`,
+                choices: availableAZs,
+                default: availableAZs.slice(0, Math.min(3, availableAZs.length)),
+                validate: (input) => 
+                    input.length > 0 ? true : "Select at least one availability zone"
+            }
+        ]);
+        
+        azs.push(azSelectionAnswer.selectedAZs);
+    }
+    
+    return {
+        NumRegions: numRegions,
+        Regions: regions,
+        AZs: azs
+    };
 }
