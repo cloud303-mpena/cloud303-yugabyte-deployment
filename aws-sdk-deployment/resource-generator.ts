@@ -61,7 +61,7 @@ const DEFAULTS: YugabyteParams = {
   Region: "us-east-1",
 };
 
-const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
+const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge", "m6in.xlarge"];
 const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
 /**
  * Prompts the user for Yugabyte deployment parameters using interactive CLI inputs.
@@ -281,7 +281,7 @@ export async function createEC2Instance(
   try {
     const blockDeviceMappings: BlockDeviceMapping[] = [
       {
-        DeviceName: "/dev/xvda",
+        DeviceName: "/dev/sda1",
         Ebs: {
           VolumeSize: 50,
           DeleteOnTermination: true,
