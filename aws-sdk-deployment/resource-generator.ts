@@ -1062,36 +1062,6 @@ export async function createAndSaveKeyPair(
   }
 }
 
-const PLACEMENTDEFAULTS = {
-  NumRegions: 2,
-  DefaultRegions: ["us-east-1", "us-west-2"],
-};
-
-/**
- * Validates if a region exists in AWS
- * @param region Region name to validate
- * @returns True if valid, error message if invalid
- */
-async function validateRegion(region: string): Promise<boolean | string> {
-  try {
-    const ec2Client = new EC2Client({ region: "us-east-1" });
-    const command = new DescribeRegionsCommand({
-      RegionNames: [region],
-      AllRegions: false,
-    });
-
-    const response = await ec2Client.send(command);
-    if (response.Regions && response.Regions.length > 0) {
-      return true;
-    } else {
-      return `Region '${region}' does not exist in AWS`;
-    }
-  } catch (error) {
-    return `Invalid region: ${
-      error instanceof Error ? error.message : String(error)
-    }`;
-  }
-}
 
 /**
  * Gets available AZs for a specific region
@@ -1131,75 +1101,75 @@ async function validateRegion(region: string): Promise<boolean | string> {
  * Prompts user for PlacementInfo with AWS validations
  * @returns Promise resolving to PlacementInfo
  */
-export async function promptForPlacementInfo(): Promise<PlacementInfo> {
-  // Step 1: Ask for number of regions
-  const numRegionsAnswer = await inquirer.prompt([
-    {
-      type: "input",
-      name: "NumRegions",
-      message: "Enter the number of regions:",
-      default: String(PLACEMENTDEFAULTS.NumRegions),
-      validate: (input) => {
-        const num = parseInt(input, 10);
-        return !isNaN(num) && num > 0
-          ? true
-          : "Please enter a valid positive number";
-      },
-    },
-  ]);
+// export async function promptForPlacementInfo(): Promise<PlacementInfo> {
+//   // Step 1: Ask for number of regions
+//   const numRegionsAnswer = await inquirer.prompt([
+//     {
+//       type: "input",
+//       name: "NumRegions",
+//       message: "Enter the number of regions:",
+//       default: String(PLACEMENTDEFAULTS.NumRegions),
+//       validate: (input) => {
+//         const num = parseInt(input, 10);
+//         return !isNaN(num) && num > 0
+//           ? true
+//           : "Please enter a valid positive number";
+//       },
+//     },
+//   ]);
 
-  const numRegions = parseInt(numRegionsAnswer.NumRegions, 10);
-  const regions: string[] = [];
+//   const numRegions = parseInt(numRegionsAnswer.NumRegions, 10);
+//   const regions: string[] = [];
 
-  // Step 2: Collect and validate each region
-  for (let i = 0; i < numRegions; i++) {
-    const regionAnswer = await inquirer.prompt([
-      {
-        type: "input",
-        name: "region",
-        message: `Enter region ${i + 1} name (e.g., us-west-2):`,
-        default: PLACEMENTDEFAULTS.DefaultRegions[i] || "",
-        validate: validateRegion,
-      },
-    ]);
+//   // Step 2: Collect and validate each region
+//   for (let i = 0; i < numRegions; i++) {
+//     const regionAnswer = await inquirer.prompt([
+//       {
+//         type: "input",
+//         name: "region",
+//         message: `Enter region ${i + 1} name (e.g., us-west-2):`,
+//         default: PLACEMENTDEFAULTS.DefaultRegions[i] || "",
+//         validate: validateRegion,
+//       },
+//     ]);
 
-    regions.push(regionAnswer.region);
-  }
+//     regions.push(regionAnswer.region);
+//   }
 
-  // Step 3: Collect AZs for each region
-  const azs: string[][] = [];
+//   // Step 3: Collect AZs for each region
+//   const azs: string[][] = [];
 
-  for (let i = 0; i < regions.length; i++) {
-    const region = regions[i];
-    const availableAZs = await getAvailableAZs(region);
+//   for (let i = 0; i < regions.length; i++) {
+//     const region = regions[i];
+//     const availableAZs = await getAvailableAZs(region);
 
-    if (availableAZs.length === 0) {
-      throw new Error(
-        `Could not retrieve availability zones for region ${region}`
-      );
-    }
+//     if (availableAZs.length === 0) {
+//       throw new Error(
+//         `Could not retrieve availability zones for region ${region}`
+//       );
+//     }
 
-    // Show available AZs for this region
-    console.log(`\nAvailable AZs in ${region}:`, availableAZs.join(", "));
+//     // Show available AZs for this region
+//     console.log(`\nAvailable AZs in ${region}:`, availableAZs.join(", "));
 
-    const azSelectionAnswer = await inquirer.prompt([
-      {
-        type: "checkbox",
-        name: "selectedAZs",
-        message: `Select availability zones for ${region}:`,
-        choices: availableAZs,
-        default: availableAZs.slice(0, Math.min(3, availableAZs.length)),
-        validate: (input) =>
-          input.length > 0 ? true : "Select at least one availability zone",
-      },
-    ]);
+//     const azSelectionAnswer = await inquirer.prompt([
+//       {
+//         type: "checkbox",
+//         name: "selectedAZs",
+//         message: `Select availability zones for ${region}:`,
+//         choices: availableAZs,
+//         default: availableAZs.slice(0, Math.min(3, availableAZs.length)),
+//         validate: (input) =>
+//           input.length > 0 ? true : "Select at least one availability zone",
+//       },
+//     ]);
 
-    azs.push(azSelectionAnswer.selectedAZs);
-  }
+//     azs.push(azSelectionAnswer.selectedAZs);
+//   }
 
-  return {
-    NumRegions: numRegions,
-    Regions: regions,
-    AZs: azs,
-  };
-}
+//   return {
+//     NumRegions: numRegions,
+//     Regions: regions,
+//     AZs: azs,
+//   };
+// }

@@ -3,7 +3,7 @@ import * as resGen from "./resource-generator";
 import { YugabyteParams } from "./types";
 import inquirer from "inquirer";
 
-async function deployMultiAZ(): Promise<string> {
+export async function deployMultiAZ(): Promise<string> {
   //Prompts user for paramaters
   const params: YugabyteParams = await promptForYBParams();
 
@@ -153,7 +153,6 @@ const DEFAULTS: YugabyteParams = {
 };
 
 const INSTANCE_TYPES = ["t3.medium", "c5.xlarge", "c5.2xlarge"];
-const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
 
 const managedTag = { Key: "c303-yugabyte-managed", Value: "true" };
 
@@ -166,7 +165,7 @@ const managedTagType: Tag = {
  *
  * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
  */
-export async function promptForYBParams(): Promise<YugabyteParams> {
+async function promptForYBParams(): Promise<YugabyteParams> {
   const answers = await inquirer.prompt([
     {
       type: "input",
@@ -214,13 +213,7 @@ export async function promptForYBParams(): Promise<YugabyteParams> {
       message: "SshUser",
       default: DEFAULTS.SshUser,
     },
-    {
-      type: "list",
-      name: "DeploymentType",
-      message: "Select Deployment Type",
-      choices: DEPLOYMENT_TYPES,
-      default: DEFAULTS.DeploymentType,
-    },
+
     {
       type: "input",
       name: "Region",
