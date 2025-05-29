@@ -16,13 +16,12 @@ async function createUniverse() {
     },
   ]);
 
-  switch(answers.DeploymentType){
-    case "Multi-AZ":
-        deployMultiAZ();
-    case "Multi-Region":
-        deployMultiRegion();
+  if(answers.DeploymentType === "Multi-AZ"){
+        await deployMultiAZ();}
+  else if(answers.DeploymentType === "Multi-Region"){
+        await deployMultiRegion();}
     //add single later
-  }
+  
 }
 
 createUniverse();

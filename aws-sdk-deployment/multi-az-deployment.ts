@@ -236,5 +236,3 @@ async function promptForMultiAZParams(): Promise<YugabyteParams> {
 
   return answers as YugabyteParams;
 }
-
-deployMultiAZ();
