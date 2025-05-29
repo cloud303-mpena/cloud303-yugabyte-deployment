@@ -5,7 +5,7 @@ import inquirer from "inquirer";
 
 export async function deployMultiAZ(): Promise<string> {
   //Prompts user for paramaters
-  const params: YugabyteParams = await promptForYBParams();
+  const params: YugabyteParams = await promptForMultiAZParams();
 
   // Create Tag from params
   const managedTag = {
@@ -165,7 +165,7 @@ const managedTagType: Tag = {
  *
  * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
  */
-async function promptForYBParams(): Promise<YugabyteParams> {
+async function promptForMultiAZParams(): Promise<YugabyteParams> {
   const answers = await inquirer.prompt([
     {
       type: "input",

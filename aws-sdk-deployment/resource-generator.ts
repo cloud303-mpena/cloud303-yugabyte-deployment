@@ -662,6 +662,25 @@ export async function createYugaByteSecurityGroup(
     throw error;
   }
 }
+export async function updateSecurityGroupForCrossRegionTraffic(
+  securityGroupId: string,
+  cidrBlock: string,
+  region: string
+): Promise<void> {
+  const ec2Client = new EC2Client({ region });
+  
+  await ec2Client.send(new AuthorizeSecurityGroupIngressCommand({
+    GroupId: securityGroupId,
+    IpPermissions: [
+      {
+        IpProtocol: "-1", // All protocols
+        FromPort: -1,     // All ports
+        ToPort: -1,       // All ports
+        IpRanges: [{ CidrIp: cidrBlock }]
+      }
+    ]
+  }));
+}
 
 /**
  * Creates an Internet Gateway, attaches it to a VPC, and creates a public route table
