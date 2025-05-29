@@ -104,7 +104,6 @@ async function destroyUniverse(region: string, managedTag: {Key: string, Value: 
 
     // --- 1. Terminate EC2 instances ---
     console.log("Step 1: Terminating EC2 instances...");
-
     // Get EC2 instances that are tagged as managed
     const taggedInput = {
         Filters: [
@@ -341,7 +340,8 @@ async function destroyUniverse(region: string, managedTag: {Key: string, Value: 
 
                 // 3. Delete subnets
                 const subnetsCommand = new DescribeSubnetsCommand({
-                    Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+                    Filters: [{ Name: `tag:${managedTag.Key}`, Values: [managedTag.Value]}
+                    ]
                 });
                 const subnetsResponse = await ec2Client.send(subnetsCommand);
 
@@ -356,7 +356,7 @@ async function destroyUniverse(region: string, managedTag: {Key: string, Value: 
 
                 // 4. Delete security groups (except the default one which is deleted with the VPC)
                 const securityGroupsCommand = new DescribeSecurityGroupsCommand({
-                    Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+                    Filters: [{ Name: `tag:${managedTag.Key}`, Values: [managedTag.Value]}]
                 });
                 const securityGroupsResponse = await ec2Client.send(securityGroupsCommand);
 
