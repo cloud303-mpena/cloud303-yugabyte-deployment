@@ -4,7 +4,7 @@ import * as resGen from "./resource-generator";
 import { YugabyteParams, PlacementInfo } from "./types";
 
 export async function deployMultiRegion(): Promise<string> {
-  const params = await promptForYBParams()
+  const params = await promptForYBParams();
   const placementInfo: PlacementInfo = await promptForPlacementInfo();
 
   // Create Tag from params
@@ -36,61 +36,71 @@ export async function deployMultiRegion(): Promise<string> {
     regionToCidr[placementInfo.Regions[i]] = `10.${i}.0.0/16`;
   }
   //figure out how many nodes in each az
-//   let numNodesPerAZ = Number[placementInfo.AZs.length]
-//   for(let i = 0; i < placementInfo.AZs.length; i++){
-//     if(i <= params.NumberOfNodes % placementInfo.AZs.length){
-//         numNodesPerAZ[i] = Math.ceil(placementInfo.AZs.length / params.NumberOfNodes)
-//     }
-//     else{
-//         numNodesPerAZ[i] = Math.floor(placementInfo.AZs.length / params.NumberOfNodes)
-//     }
-//   }
-    // Deploy infrastructure in each region
-  for(let regionIdx = 0; regionIdx < placementInfo.Regions.length; regionIdx++) {
+  let numNodesPerRegion = Number[placementInfo.NumRegions];
+  for (let i = 0; i < placementInfo.NumRegions; i++) {
+    if (i <= params.NumberOfNodes % placementInfo.NumRegions) {
+      numNodesPerRegion[i] = Math.ceil(
+        placementInfo.NumRegions / params.NumberOfNodes
+      );
+    } else {
+      numNodesPerRegion[i] = Math.floor(
+        placementInfo.NumRegions / params.NumberOfNodes
+      );
+    }
+  }
+  // Deploy infrastructure in each region
+  for (
+    let regionIdx = 0;
+    regionIdx < placementInfo.Regions.length;
+    regionIdx++
+  ) {
     const region = placementInfo.Regions[regionIdx];
     const regionAZs = placementInfo.AZs[regionIdx];
     const cidrBlock = regionToCidr[region];
-    
-    console.log(`\n--- Deploying infrastructure in ${region} (${cidrBlock}) ---`);
-    
+
+    console.log(
+      `\n--- Deploying infrastructure in ${region} (${cidrBlock}) ---`
+    );
+
     // Create VPC in region
     const vpcId = await resGen.createVpc(region, cidrBlock);
     vpcIds.push(vpcId!);
     regionToVpcId[region] = vpcId!;
-    
+
     // Build network config for this region
     // We need to modify this to use the specific AZs selected
-    const nodesPerRegion = Math.ceil(params.NumberOfNodes / placementInfo.NumRegions);
-    
+    const nodesPerRegion = Math.ceil(
+      params.NumberOfNodes / placementInfo.NumRegions
+    );
+
     // Create subnets based on chosen AZs
     const cidrToAZ: Record<string, string> = {};
-    for (let azIdx = 0; azIdx < regionAZs.length; azIdx++) {
+    for (let azIdx = 0; azIdx < numNodesPerRegion[regionIdx]; azIdx++) {
       // Create subnet CIDR blocks within the region's VPC CIDR
-      cidrToAZ[`10.${regionIdx}.${azIdx}.0/24`] = regionAZs[azIdx % regionAZs.length];
+      cidrToAZ[`10.${regionIdx}.${azIdx}.0/24`] =
+        regionAZs[azIdx % regionAZs.length];
     }
-    
+
     const subnetIds = await resGen.createSubnets(vpcId!, region, cidrToAZ);
-    
+
     // Create internet gateway and route table
-    const intIdAndRouteTableId = await resGen.createInternetGatewayAndRouteTable(
-      vpcId!,
-      region
-    );
-    
+    const intIdAndRouteTableId =
+      await resGen.createInternetGatewayAndRouteTable(vpcId!, region);
+
     // Associate subnets with route table
     await resGen.createSubnetRouteTableAssociations(
       subnetIds,
       intIdAndRouteTableId.routeTableId,
       region
     );
-    
+
     // Create security group
     const securityGroupId = await resGen.createYugaByteSecurityGroup(
       vpcId!,
       cidrBlock,
       region
     );
-    
+
     // Update security group to allow traffic from all other VPC CIDRs
     for (const otherRegion in regionToCidr) {
       if (otherRegion !== region) {
@@ -101,7 +111,7 @@ export async function deployMultiRegion(): Promise<string> {
         );
       }
     }
-    
+
     // Create network interfaces with public IPs
     let netIntIds: string[] = [];
     let elasticIps: string[] = [];
@@ -114,159 +124,160 @@ export async function deployMultiRegion(): Promise<string> {
       netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
       elasticIps.push(currNetIntIdAndIp.publicIp);
     }
-    
+
     // Create SSM instance role (if not already created)
     const instanceProfileArn = await resGen.createSSMInstanceRole(
       "SSMPermissionRole",
       managedTag
     );
-    
+
     // Create EC2 instances for this region
     // Distribute RF factor proportionally across regions
-    const nodesInRegion = Math.min(
-      Math.ceil(params.RFFactor / placementInfo.NumRegions),
-      netIntIds.length
-    );
-    
+
     const azs = Object.values(cidrToAZ);
-    
-    for (let i = 0; i < nodesInRegion; i++) {
+
+    for (let i = 0; i < numNodesPerRegion[regionIdx]; i++) {
       // Track which region this instance is in
-      const instancePromise = resGen.createEC2Instance(
-        `yugabyte-${region}-${i}`,
-        region,
-        params.InstanceType,
-        params.LatestAmiId,
-        params.KeyName,
-        netIntIds[i],
-        true, // We'll make all nodes master-eligible in a multi-region setup
-        netIntIds,
-        azs[i % azs.length],
-        params.SshUser
-      ).then(instance => ({...instance, region}));
-      
+      const instancePromise = resGen
+        .createEC2Instance(
+          `yugabyte-${region}-${i}`,
+          region,
+          params.InstanceType,
+          params.LatestAmiId,
+          params.KeyName,
+          netIntIds[i],
+          true, //change this later
+          netIntIds,
+          azs[i % azs.length],
+          params.SshUser
+        )
+        .then((instance) => ({ ...instance, region }));
+
       allEc2InstanceInfo.push(instancePromise);
     }
   }
 
+  console.log("\n--- Setting up VPC peering between regions ---");
 
-//   const cidrToAZ = await resGen.buildNetworkConfig(
-//     params.Region,
-//     params.NumberOfNodes
-//   );
-//   const subnetIds = await resGen.createSubnets(vpcId!, params.Region, cidrToAZ);
+  if (placementInfo.NumRegions > 1) {
+    const peeringConnections: Record<string, string> = {};
 
-//   const intIdAndRouteTableId = await resGen.createInternetGatewayAndRouteTable(
-//     vpcId!,
-//     params.Region
-//   );
+    for (let i = 0; i < placementInfo.Regions.length; i++) {
+      for (let j = i + 1; j < placementInfo.Regions.length; j++) {
+        const sourceRegion = placementInfo.Regions[i];
+        const targetRegion = placementInfo.Regions[j];
+        const sourceVpcId = regionToVpcId[sourceRegion];
+        const targetVpcId = regionToVpcId[targetRegion];
+        const sourceCidr = regionToCidr[sourceRegion];
+        const targetCidr = regionToCidr[targetRegion];
 
-//   const associationResponse = await resGen.createSubnetRouteTableAssociations(
-//     subnetIds,
-//     intIdAndRouteTableId.routeTableId,
-//     params.Region
-//   );
+        console.log(
+          `Creating VPC peering between ${sourceRegion} and ${targetRegion}`
+        );
 
-//   const securityGroupId = await resGen.createYugaByteSecurityGroup(
-//     vpcId!,
-//     "10.0.0.0/16",
-//     params.Region
-//   );
+        // Create and accept peering connection
+        const peeringId = await resGen.createVpcPeering(
+          sourceRegion,
+          targetRegion,
+          sourceVpcId,
+          targetVpcId
+        );
 
-//   let netIntIds: string[] = [];
-//   let elasticIps: string[] = [];
-//   for (const subnetId of subnetIds) {
-//     let currNetIntIdAndIp = await resGen.createNetworkInterfaceWithPublicIP(
-//       subnetId,
-//       securityGroupId,
-//       params.Region
-//     );
-//     netIntIds.push(currNetIntIdAndIp.networkInterfaceId);
-//     elasticIps.push(currNetIntIdAndIp.publicIp);
-//   }
+        // Update route tables in both directions
+        await resGen.updateRouteTablesForPeering(
+          sourceRegion,
+          sourceVpcId,
+          targetCidr,
+          peeringId
+        );
 
-//   const instanceProfileArn = await resGen.createSSMInstanceRole(
-//     "SSMPermissionRole",
-//     managedTag
-//   );
+        await resGen.updateRouteTablesForPeering(
+          targetRegion,
+          targetVpcId,
+          sourceCidr,
+          peeringId
+        );
 
-//   const azs = Object.values(cidrToAZ);
+        peeringConnections[`${sourceRegion}-${targetRegion}`] = peeringId;
+      }
+    }
 
-//   let ec2InstanceInfo: Promise<{
-//     instanceId: string;
-//     privateIpAddress?: string;
-//     publicIp?: string;
-//     isMasterNode: boolean;
-//   }>[] = [];
-//   let masterPrivateIpAddresses: string[] = [];
+    console.log("VPC peering connections established:", peeringConnections);
+  }
 
-//   for (let i = 0; i < params.RFFactor; i++) {
-//     ec2InstanceInfo.push(
-//       resGen.createEC2Instance(
-//         `yugabyte-${i}`,
-//         params.Region,
-//         params.InstanceType,
-//         params.LatestAmiId,
-//         params.KeyName,
-//         netIntIds[i],
-//         i < params.RFFactor ? true : false,
-//         netIntIds,
-//         azs[i],
-//         params.SshUser
-//       )
-//     );
-//   }
+  // Wait for all instances to be running
+  console.log("\n--- Waiting for all instances to be running ---");
+  await Promise.all(
+    allEc2InstanceInfo.map(async (instancePromise) => {
+      const instance = await instancePromise;
+      return resGen.waitForInstanceRunning(
+        instance.region,
+        instance.instanceId
+      );
+    })
+  );
 
-//   await Promise.all(
-//     ec2InstanceInfo.map(async (instancePromise) => {
-//       const instance = await instancePromise;
-//       return resGen.waitForInstanceRunning(params.Region, instance.instanceId);
-//     })
-//   );
+  // Associate instance profiles and collect master IP addresses
+  const instances = await Promise.all(allEc2InstanceInfo);
 
-//   const instances = await Promise.all(ec2InstanceInfo);
-//   instances.forEach(({ instanceId }) => {
-//     resGen.associateInstanceProfileWithEc2(
-//       instanceId,
-//       instanceProfileArn,
-//       params.Region
-//     );
-//   });
+  for (const instance of instances) {
+    await resGen.associateInstanceProfileWithEc2(
+      instance.instanceId,
+      instanceProfileArn,
+      instance.region
+    );
 
-//   instances.forEach(({ privateIpAddress, isMasterNode }) => {
-//     if (isMasterNode) {
-//       masterPrivateIpAddresses.push(privateIpAddress!);
-//     } else {
-//     }
-//   });
+    if (instance.isMasterNode && instance.privateIpAddress) {
+      masterPrivateIpAddresses.push(instance.privateIpAddress);
+    }
+  }
 
-//   let numTries = 0;
-//   while (numTries < 30) {
-//     try {
-//       const response = await resGen.configureYugabyteNodes(
-//         (
-//           await ec2InstanceInfo[0]
-//         ).instanceId,
-//         params.SshUser,
-//         params.Region,
-//         Object.values(cidrToAZ),
-//         masterPrivateIpAddresses,
-//         params.RFFactor
-//       );
-//       break;
-//     } catch (err) {
-//       numTries++;
-//       console.log("Waiting for instance to be in valid state... " + err);
-//       await new Promise((resolve) => setTimeout(resolve, 5000));
-//     }
-//   }
+  // Configure YugabyteDB across all nodes
+  console.log("\n--- Configuring YugabyteDB across all regions ---");
+  let numTries = 0;
+  while (numTries < 30) {
+    try {
+      // Use the first instance to configure the entire cluster
+      const firstInstance = await allEc2InstanceInfo[0];
+      const response = await resGen.configureYugabyteDBMultiRegion(
+        firstInstance.instanceId,
+        params.SshUser,
+        firstInstance.region,
+        placementInfo.Regions,
+        placementInfo.AZs,
+        masterPrivateIpAddresses,
+        params.RFFactor
+      );
+      break;
+    } catch (err) {
+      numTries++;
+      console.log("Waiting for instances to be in valid state... " + err);
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  }
 
-//   if (numTries >= 30) {
-//     console.log("Instances timed out");
-//   }
-//   const firstInstance = await ec2InstanceInfo[0];
-//   console.log(`View YB UI at: http://${firstInstance.publicIp}:7000`);
-   return "";
+  if (numTries >= 30) {
+    console.log("Instances timed out during configuration");
+    throw new Error("Failed to configure YugabyteDB cluster");
+  }
+
+  // Show connection information
+  const firstInstance = await allEc2InstanceInfo[0];
+  console.log(`\n=== YugabyteDB Multi-Region Cluster Deployed ===`);
+  console.log(`View YB UI at: http://${firstInstance.publicIp}:7000`);
+
+  // Output information about all instances
+  console.log("\nInstances by Region:");
+  for (const region of placementInfo.Regions) {
+    const regionInstances = instances.filter((i) => i.region === region);
+    console.log(`\n${region}:`);
+    regionInstances.forEach((instance, idx) => {
+      console.log(
+        `  Node ${idx + 1}: ${instance.publicIp} (${instance.privateIpAddress})`
+      );
+    });
+  }
+  return "";
 }
 
 const PLACEMENTDEFAULTS = {
@@ -373,8 +384,7 @@ async function promptForPlacementInfo(): Promise<PlacementInfo> {
   };
 }
 
-async function promptForYBParams(){
-
+async function promptForYBParams() {
   const DEFAULTS: YugabyteParams = {
     DBVersion: "2024.2.2.1-b190",
     RFFactor: 3,

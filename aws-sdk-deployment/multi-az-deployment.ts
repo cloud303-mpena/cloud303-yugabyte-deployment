@@ -3,7 +3,18 @@ import * as resGen from "./resource-generator";
 import { YugabyteParams } from "./types";
 import inquirer from "inquirer";
 
-export async function deployMultiAZ(): Promise<string> {
+export async function deployMultiAZ():Promise<{
+  vpcId: string;
+  masterPrivateIpAddresses: string[];
+  instances: {
+    instanceId: string;
+    privateIpAddress?: string;
+    publicIp?: string;
+    isMasterNode: boolean;
+  }[];
+  securityGroupId: string;
+  routeTableId: string;
+}> {
   //Prompts user for paramaters
   const params: YugabyteParams = await promptForMultiAZParams();
 
@@ -134,7 +145,13 @@ export async function deployMultiAZ(): Promise<string> {
   }
   const firstInstance = await ec2InstanceInfo[0];
   console.log(`View YB UI at: http://${firstInstance.publicIp}:7000`);
-  return "";
+    return {
+    vpcId: vpcId!,
+    masterPrivateIpAddresses,
+    instances,
+    securityGroupId,
+    routeTableId: intIdAndRouteTableId.routeTableId
+  };
 }
 
 const DEFAULTS: YugabyteParams = {

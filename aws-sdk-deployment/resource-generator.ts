@@ -27,6 +27,10 @@ import {
   Tag,
   TagSpecification,
   DescribeRegionsCommand,
+  DescribeRouteTablesCommand,
+  waitUntilVpcPeeringConnectionExists,
+  CreateVpcPeeringConnectionCommand,
+  AcceptVpcPeeringConnectionCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -1192,3 +1196,84 @@ export async function createAndSaveKeyPair(
 //     AZs: azs,
 //   };
 // }
+export async function createVpcPeering(
+  sourceRegion: string,
+  targetRegion: string, 
+  sourceVpcId: string,
+  targetVpcId: string
+): Promise<string> {
+  const sourceClient = new EC2Client({ region: sourceRegion });
+  const targetClient = new EC2Client({ region: targetRegion });
+  
+  // Create peering connection request
+  const createPeeringResult = await sourceClient.send(
+    new CreateVpcPeeringConnectionCommand({
+      VpcId: sourceVpcId,
+      PeerVpcId: targetVpcId,
+      PeerRegion: targetRegion
+    })
+  );
+  
+  const peeringConnectionId = createPeeringResult.VpcPeeringConnection?.VpcPeeringConnectionId;
+  
+  if (!peeringConnectionId) {
+    throw new Error("Failed to create VPC peering connection");
+  }
+  
+  // Wait for the peering connection to be available
+  await waitUntilVpcPeeringConnectionExists(
+    { client: sourceClient, maxWaitTime: 60 },
+    { VpcPeeringConnectionIds: [peeringConnectionId] }
+  );
+  
+  // Accept the VPC peering connection in target region
+  await targetClient.send(
+    new AcceptVpcPeeringConnectionCommand({
+      VpcPeeringConnectionId: peeringConnectionId
+    })
+  );
+  
+  return peeringConnectionId;
+}
+
+// Helper function to update route tables for VPC peering
+export async function updateRouteTablesForPeering(
+  region: string,
+  vpcId: string,
+  destinationCidr: string,
+  peeringConnectionId: string
+): Promise<void> {
+  const ec2Client = new EC2Client({ region });
+  
+  // Get all route tables for the VPC
+  const routeTableResponse = await ec2Client.send(
+    new DescribeRouteTablesCommand({
+      Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+    })
+  );
+  
+  if (!routeTableResponse.RouteTables || routeTableResponse.RouteTables.length === 0) {
+    throw new Error(`No route tables found for VPC ${vpcId}`);
+  }
+  
+  // Add routes to each route table
+  for (const routeTable of routeTableResponse.RouteTables) {
+    const routeTableId = routeTable.RouteTableId!;
+    
+    try {
+      await ec2Client.send(new CreateRouteCommand({
+        RouteTableId: routeTableId,
+        DestinationCidrBlock: destinationCidr,
+        VpcPeeringConnectionId: peeringConnectionId
+      }));
+      
+      console.log(`Added route in ${region} route table ${routeTableId} to ${destinationCidr} via peering ${peeringConnectionId}`);
+    } catch (err: any) {
+      if (err.name === 'RouteAlreadyExists') {
+        console.log(`Route already exists in ${routeTableId}`);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
