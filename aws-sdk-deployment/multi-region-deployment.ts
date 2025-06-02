@@ -431,15 +431,15 @@ export async function deployMultiRegion(): Promise<string> {
     try {
       // Use the first instance to configure the entire cluster
       const firstInstance = await allEc2InstanceInfo[0];
-      const response = await resGen.configureYugabyteDBMultiRegion(
-        firstInstance.instanceId,
-        params.SshUser,
-        firstInstance.region,
-        placementInfo.Regions,
-        placementInfo.AZs,
-        masterPrivateIpAddresses,
-        params.RFFactor
-      );
+      // const response = await resGen.configureYugabyteDBMultiRegion(
+      //   firstInstance.instanceId,
+      //   params.SshUser,
+      //   firstInstance.region,
+      //   placementInfo.Regions,
+      //   placementInfo.AZs,
+      //   masterPrivateIpAddresses,
+      //   params.RFFactor
+      // );
       break;
     } catch (err) {
       numTries++;

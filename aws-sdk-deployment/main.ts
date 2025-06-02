@@ -4,24 +4,26 @@ import { DescribeRegionsCommand, EC2Client } from "@aws-sdk/client-ec2";
 import inquirer from "inquirer";
 import { deployMultiRegion } from "./multi-region-deployment";
 import { deployMultiAZ } from "./multi-az-deployment";
+import { deploySingleAZ } from "./single-region-deployment";
 async function createUniverse() {
-  const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-Server", "Multi-Region"];
+  const DEPLOYMENT_TYPES = ["Multi-AZ", "Single-AZ", "Multi-Region"];
   const answers = await inquirer.prompt([
     {
       type: "list",
       name: "DeploymentType",
       message: "Select Deployment Type",
       choices: DEPLOYMENT_TYPES,
-      default: DEPLOYMENT_TYPES[0]
+      default: DEPLOYMENT_TYPES[0],
     },
   ]);
 
-  if(answers.DeploymentType === "Multi-AZ"){
-        await deployMultiAZ();}
-  else if(answers.DeploymentType === "Multi-Region"){
-        await deployMultiRegion();}
-    //add single later
-  
+  if (answers.DeploymentType === "Multi-AZ") {
+    await deployMultiAZ();
+  } else if (answers.DeploymentType === "Multi-Region") {
+    await deployMultiRegion();
+  } else if (answers.DeploymentType === "Single-AZ") {
+    await deploySingleAZ();
+  }
 }
 
 createUniverse();

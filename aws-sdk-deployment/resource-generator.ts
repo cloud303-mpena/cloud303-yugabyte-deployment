@@ -31,6 +31,7 @@ import {
   waitUntilVpcPeeringConnectionExists,
   CreateVpcPeeringConnectionCommand,
   AcceptVpcPeeringConnectionCommand,
+  CreatePlacementGroupCommand,
 } from "@aws-sdk/client-ec2";
 import {
   SSMClient,
@@ -51,6 +52,7 @@ import {
 import { get } from "http";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
+import { group } from "console";
 
 const managedTag = { Key: "c303-yugabyte-managed", Value: "true" };
 
@@ -181,7 +183,8 @@ export async function createEC2Instance(
   isMasterNode: boolean = false,
   masterNetIntIds: string[],
   zone: string,
-  sshUser: string
+  sshUser: string,
+  placementGroupName: string = ""
 ) {
   const ec2Client = new EC2Client({ region });
   try {
@@ -204,11 +207,16 @@ export async function createEC2Instance(
 
     const ec2TagSpec: TagSpecification = {
       ResourceType: "instance",
-      Tags: [managedTag],
+      Tags: [
+        {
+          Key: "Name",
+          Value: name,
+        },
+        managedTag,
+      ],
     };
 
     const instanceParams = {
-      Name: name,
       ImageId: await getAmiIdFromSSM(imageId),
       InstanceType: instanceType as _InstanceType,
       MinCount: 1,
@@ -232,6 +240,13 @@ export async function createEC2Instance(
         )
       ).toString("base64"),
       TagSpecifications: [ec2TagSpec],
+      ...(placementGroupName
+        ? {
+            Placement: {
+              GroupName: placementGroupName,
+            },
+          }
+        : {}),
     };
 
     // Create the instance
@@ -272,6 +287,7 @@ export async function createEC2Instance(
     throw err;
   }
 }
+
 /**
  * Associates an IAM instance profile with a specified EC2 instance.
  *
@@ -385,6 +401,8 @@ function generateUserData(
 ): string {
   // Format master addresses for YugaByteDB configuration
   const masterAddresses = masterPrivateIps.map((ip) => `${ip}:7100`).join(",");
+      console.log( `sudo -u ${sshUser} /home/${sshUser}/start_master.sh ${nodePrivateIp} ${zone} ${region} /home/${sshUser} '${masterAddresses}'
+sudo -u ${sshUser} /home/${sshUser}/start_tserver.sh ${nodePrivateIp} ${zone} ${region} /home/${sshUser} '${masterAddresses}'`)
 
   return `#!/bin/bash -xe
 apt-get update -y
@@ -672,18 +690,20 @@ export async function updateSecurityGroupForCrossRegionTraffic(
   region: string
 ): Promise<void> {
   const ec2Client = new EC2Client({ region });
-  
-  await ec2Client.send(new AuthorizeSecurityGroupIngressCommand({
-    GroupId: securityGroupId,
-    IpPermissions: [
-      {
-        IpProtocol: "-1", // All protocols
-        FromPort: -1,     // All ports
-        ToPort: -1,       // All ports
-        IpRanges: [{ CidrIp: cidrBlock }]
-      }
-    ]
-  }));
+
+  await ec2Client.send(
+    new AuthorizeSecurityGroupIngressCommand({
+      GroupId: securityGroupId,
+      IpPermissions: [
+        {
+          IpProtocol: "-1", // All protocols
+          FromPort: -1, // All ports
+          ToPort: -1, // All ports
+          IpRanges: [{ CidrIp: cidrBlock }],
+        },
+      ],
+    })
+  );
 }
 
 /**
@@ -1085,7 +1105,6 @@ export async function createAndSaveKeyPair(
   }
 }
 
-
 /**
  * Gets available AZs for a specific region
  * @param region AWS region
@@ -1198,41 +1217,42 @@ export async function createAndSaveKeyPair(
 // }
 export async function createVpcPeering(
   sourceRegion: string,
-  targetRegion: string, 
+  targetRegion: string,
   sourceVpcId: string,
   targetVpcId: string
 ): Promise<string> {
   const sourceClient = new EC2Client({ region: sourceRegion });
   const targetClient = new EC2Client({ region: targetRegion });
-  
+
   // Create peering connection request
   const createPeeringResult = await sourceClient.send(
     new CreateVpcPeeringConnectionCommand({
       VpcId: sourceVpcId,
       PeerVpcId: targetVpcId,
-      PeerRegion: targetRegion
+      PeerRegion: targetRegion,
     })
   );
-  
-  const peeringConnectionId = createPeeringResult.VpcPeeringConnection?.VpcPeeringConnectionId;
-  
+
+  const peeringConnectionId =
+    createPeeringResult.VpcPeeringConnection?.VpcPeeringConnectionId;
+
   if (!peeringConnectionId) {
     throw new Error("Failed to create VPC peering connection");
   }
-  
+
   // Wait for the peering connection to be available
   await waitUntilVpcPeeringConnectionExists(
     { client: sourceClient, maxWaitTime: 60 },
     { VpcPeeringConnectionIds: [peeringConnectionId] }
   );
-  
+
   // Accept the VPC peering connection in target region
   await targetClient.send(
     new AcceptVpcPeeringConnectionCommand({
-      VpcPeeringConnectionId: peeringConnectionId
+      VpcPeeringConnectionId: peeringConnectionId,
     })
   );
-  
+
   return peeringConnectionId;
 }
 
@@ -1244,36 +1264,76 @@ export async function updateRouteTablesForPeering(
   peeringConnectionId: string
 ): Promise<void> {
   const ec2Client = new EC2Client({ region });
-  
+
   // Get all route tables for the VPC
   const routeTableResponse = await ec2Client.send(
     new DescribeRouteTablesCommand({
-      Filters: [{ Name: "vpc-id", Values: [vpcId] }]
+      Filters: [{ Name: "vpc-id", Values: [vpcId] }],
     })
   );
-  
-  if (!routeTableResponse.RouteTables || routeTableResponse.RouteTables.length === 0) {
+
+  if (
+    !routeTableResponse.RouteTables ||
+    routeTableResponse.RouteTables.length === 0
+  ) {
     throw new Error(`No route tables found for VPC ${vpcId}`);
   }
-  
+
   // Add routes to each route table
   for (const routeTable of routeTableResponse.RouteTables) {
     const routeTableId = routeTable.RouteTableId!;
-    
+
     try {
-      await ec2Client.send(new CreateRouteCommand({
-        RouteTableId: routeTableId,
-        DestinationCidrBlock: destinationCidr,
-        VpcPeeringConnectionId: peeringConnectionId
-      }));
-      
-      console.log(`Added route in ${region} route table ${routeTableId} to ${destinationCidr} via peering ${peeringConnectionId}`);
+      await ec2Client.send(
+        new CreateRouteCommand({
+          RouteTableId: routeTableId,
+          DestinationCidrBlock: destinationCidr,
+          VpcPeeringConnectionId: peeringConnectionId,
+        })
+      );
+
+      console.log(
+        `Added route in ${region} route table ${routeTableId} to ${destinationCidr} via peering ${peeringConnectionId}`
+      );
     } catch (err: any) {
-      if (err.name === 'RouteAlreadyExists') {
+      if (err.name === "RouteAlreadyExists") {
         console.log(`Route already exists in ${routeTableId}`);
       } else {
         throw err;
       }
     }
   }
+}
+
+export async function createPlacementGroup(region: string, groupName: string) {
+  const client = new EC2Client({ region });
+
+  try {
+    await client.send(
+      new CreatePlacementGroupCommand({
+        GroupName: groupName,
+        Strategy: "cluster",
+        TagSpecifications: [
+          {
+            ResourceType: "placement-group" as const,
+            Tags: [
+              {
+                Key: "Name",
+                Value: "YugaBytePlacementGroup",
+              },
+              managedTag,
+            ],
+          },
+        ],
+      })
+    );
+    console.log(`Placement group "${groupName}" created successfully.`);
+  } catch (error: any) {
+    if (error.name === "InvalidPlacementGroup.Duplicate") {
+      console.log(`Placement group "${groupName}" already exists.`);
+    } else {
+      throw error;
+    }
+  }
+  return groupName;
 }

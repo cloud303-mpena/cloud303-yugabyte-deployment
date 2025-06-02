@@ -3,7 +3,7 @@ import * as resGen from "./resource-generator";
 import { YugabyteParams } from "./types";
 import inquirer from "inquirer";
 
-export async function deployMultiAZ():Promise<{
+export async function deploySingleAZ():Promise<{
   vpcId: string;
   masterPrivateIpAddresses: string[];
   instances: {
@@ -16,7 +16,7 @@ export async function deployMultiAZ():Promise<{
   routeTableId: string;
 }> {
   //Prompts user for paramaters
-  const params: YugabyteParams = await promptForMultiAZParams();
+  const { params, AZ } = await promptForSingleAZParams();
 
   // Create Tag from params
   const managedTag = {
@@ -29,10 +29,13 @@ export async function deployMultiAZ():Promise<{
 
   const vpcId = await resGen.createVpc(params.Region, "10.0.0.0/16");
 
-  const cidrToAZ = await resGen.buildNetworkConfig(
-    params.Region,
-    params.NumberOfNodes
-  );
+  const cidrToAZ ={
+  "10.0.1.0/24": AZ,
+  "10.0.2.0/24": AZ,
+  "10.0.3.0/24": AZ
+};
+
+
   const subnetIds = await resGen.createSubnets(vpcId!, params.Region, cidrToAZ);
 
   const intIdAndRouteTableId = await resGen.createInternetGatewayAndRouteTable(
@@ -69,6 +72,8 @@ export async function deployMultiAZ():Promise<{
     managedTag
   );
 
+  
+
   const azs = Object.values(cidrToAZ);
 
   let ec2InstanceInfo: Promise<{
@@ -78,6 +83,8 @@ export async function deployMultiAZ():Promise<{
     isMasterNode: boolean;
   }>[] = [];
   let masterPrivateIpAddresses: string[] = [];
+
+  const placementGroupName = await resGen.createPlacementGroup(params.Region, "Yugabyte Placement Group")
 
   for (let i = 0; i < params.RFFactor; i++) {
     ec2InstanceInfo.push(
@@ -91,7 +98,8 @@ export async function deployMultiAZ():Promise<{
         i < params.RFFactor ? true : false,
         netIntIds,
         azs[i],
-        params.SshUser
+        params.SshUser,
+        placementGroupName
       )
     );
   }
@@ -182,7 +190,7 @@ const managedTagType: Tag = {
  *
  * @returns {Promise<YugabyteParams>} A promise that resolves to an object containing the user's input for deployment parameters.
  */
-async function promptForMultiAZParams(): Promise<YugabyteParams> {
+async function promptForSingleAZParams(){
   const answers = await inquirer.prompt([
     {
       type: "input",
@@ -251,5 +259,14 @@ async function promptForMultiAZParams(): Promise<YugabyteParams> {
     },
   ]);
 
-  return answers as YugabyteParams;
+  const AZ = await inquirer.prompt([
+    {
+      type: "input",
+      name: "AvaliabilityZone",
+      message: `Avaliability Zone`,
+      default: 'us-east-1a',
+    }])
+
+  return { params: answers as YugabyteParams, AZ: AZ.AvaliabilityZone.toString() };
+
 }
