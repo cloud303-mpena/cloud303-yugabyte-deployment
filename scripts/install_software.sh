@@ -16,7 +16,7 @@ echo "Setting up time synchronization..."
 
 # Install chrony
 echo "Installing chrony..."
-sudo yum install -y chrony
+sudo apt install -y chrony
 systemctl enable chronyd
 systemctl start chronyd
 
